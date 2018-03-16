@@ -91,8 +91,8 @@ class Card():
             print("Card: {0} sn {1:05d} not supported by example\n".format(sCardName,lSerialNumber.value))
             exit()
 
-        # Acqusition and channel settings
-        self.acquisition_set()
+        # Reset the card to prevent undefined behaviour
+        self.reset()
 
     # Close connection to DAQ card
     def close(self):
@@ -271,7 +271,8 @@ class Card():
                 pnData = sp.cast(self._pvBuffer, sp.ptr16) 
                 
                 # Convert the array of data into a numpy array
-                data = np.ctypeslib.as_array(pnData, shape=(int(self.Ns),))
+                total_samples = int(self.Ns*self.Nchannels)
+                data = np.ctypeslib.as_array(pnData, shape=(total_samples,))
                 
                 # Convert it into a matrix where the number of cols is the
                 # number of channels

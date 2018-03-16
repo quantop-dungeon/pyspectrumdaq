@@ -52,9 +52,16 @@ class Card():
     def _set32(self, param, val, uint=False):
         val = int(val)
         if not uint:
-            sp.spcm_dwSetParam_i32(self._hCard, param, sp.int32(val))
+            return sp.spcm_dwSetParam_i32(self._hCard, param, sp.int32(val))
         else:
-            sp.spcm_dwSetParam_i32(self._hCard, param, sp.uint32(val))
+            return sp.spcm_dwSetParam_i32(self._hCard, param, sp.uint32(val))
+    
+    def _set64(self, param, val, uint=False):
+        val = int(val)
+        if not uint:
+            return sp.spcm_dwSetParam_i64(self._hCard, param, sp.int64(val))
+        else:
+            return sp.spcm_dwSetParam_i64(self._hCard, param, sp.uint64(val))
     
     # Connect to DAQ card
     def __init__(self):
@@ -160,13 +167,23 @@ class Card():
         
         # Single trigger, standard mode
         self._set32(sp.SPC_CARDMODE, sp.SPC_REC_STD_SINGLE)
-        self._set32(sp.SPC_TIMEOUT, int(timeout))                  # in ms
-        sp.spcm_dwSetParam_i32 (self._hCard, sp.SPC_TRIG_ORMASK,    sp.SPC_TMASK_SOFTWARE)     # trigger set to software
-        sp.spcm_dwSetParam_i32 (self._hCard, sp.SPC_TRIG_ANDMASK,   0)                      # ...
+        
+        # Set timeout value
+        self._set32(sp.SPC_TIMEOUT, int(timeout))
+        
+        # Trigger set to software
+        self._set32(sp.SPC_TRIG_ORMASK, sp.SPC_TMASK_SOFTWARE)
+        self._set32(sp.SPC_TRIG_ANDMASK, 0)                 
+        
+        # Set internal clock
         #sp.spcm_dwSetParam_i32 (self._hCard, sp.SPC_CLOCKMODE,      sp.SPC_CM_INTPLL)         # clock mode internal PLL
-        sp.spcm_dwSetParam_i32 (self._hCard, sp.SPC_CLOCKMODE,      sp.SPC_CM_EXTREFCLOCK)     # clock mode external reference clock
-        sp.spcm_dwSetParam_i32 (self._hCard, sp.SPC_REFERENCECLOCK, 10000000);              # Reference clock that is fed in is 10 MHz
-        sp.spcm_dwSetParam_i64 (self._hCard, sp.SPC_SAMPLERATE,     sp.int64(self.samplerate));              # We want to have 30 MHz as sampling rate
+        
+        # Set ecternal reference lock with 10 MHz frequency
+        self._set32(sp.SPC_CLOCKMODE, sp.SPC_CM_EXTREFCLOCK)
+        self._set32(sp.SPC_REFERENCECLOCK, 10000000)
+        
+        # Set the sampling rate
+        self._set64(sp.SPC_SAMPLERATE, self.samplerate)
 
         # Choose channel
         self.ch_init(channel, termination, fullrange)
@@ -194,30 +211,31 @@ class Card():
         sp.spcm_dwDefTransfer_i64 (self._hCard, sp.SPCM_BUF_DATA, sp.SPCM_DIR_CARDTOPC, self._lNotifySize, self._pvBuffer, sp.uint64(0), self._qwBufferSize)
 
         # start card and DMA
-        dwError = sp.spcm_dwSetParam_i32 (self._hCard, sp.SPC_M2CMD, sp.M2CMD_CARD_START |  sp.M2CMD_CARD_ENABLETRIGGER |  sp.M2CMD_DATA_STARTDMA)
+        start_cmd = sp.M2CMD_CARD_START | sp.M2CMD_CARD_ENABLETRIGGER |  sp.M2CMD_DATA_STARTDMA
+        dwError = self._set32(sp.SPC_M2CMD, start_cmd)
 
         # check for error
-        szErrorTextBuffer = sp.create_string_buffer (sp.ERRORTEXTLEN)
-        if dwError != 0: # != ERR_OK
+        szErrorTextBuffer = sp.create_string_buffer(sp.ERRORTEXTLEN)
+        if dwError != sp.ERR_OK:
             sp.spcm_dwGetErrorInfo_i32 (self._hCard, None, None, szErrorTextBuffer)
-            sys.stdout.write("{0}\n".format(szErrorTextBuffer.value))
-            sp.spcm_vClose (self._hCard)
+            print("{0}\n".format(szErrorTextBuffer.value))
+            self.close()
             exit()
 
         # wait until acquisition has finished, then calculated min and max
         else:
-            dwError = sp.spcm_dwSetParam_i32 (self._hCard, sp.SPC_M2CMD,  sp.M2CMD_CARD_WAITREADY)
+            dwError = self._set32(sp.SPC_M2CMD, sp.M2CMD_CARD_WAITREADY)
             if dwError != sp.ERR_OK:
                 if dwError == sp.ERR_TIMEOUT:
-                    sys.stdout.write ("... Timeout\n")
+                    print("... Timeout\n")
                 else:
-                    sys.stdout.write ("... Error: {0:d}\n".format(dwError))
+                    print("... Error: {0:d}\n".format(dwError))
 
             else:
                 pnData = sp.cast(self._pvBuffer, sp.ptr16) # cast to pointer to 16bit integer
                 # Convert the array of data into a numpy array while also converting it to volts
                 #a = np.fromiter(pnData, dtype=np.int16, count=int(self._qwBufferSize.value/2)).astype(float)*self._conversion
-                b = np.ctypeslib.as_array(pnData, shape=(int(self._qwBufferSize.value/2),))
+                b = np.ctypeslib.as_array(pnData, shape=(int(self.Ns),))
                 a = b.astype(float)*self._conversion
 
                 return a

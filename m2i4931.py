@@ -126,7 +126,7 @@ class Card():
         self._set32(term_param, term_val)
 
     '''
-    Specify memory length.
+    Specify number of samples (per channel).
     Samplerate in Hz.
     Timeout in ms.
     Specify channel number as e.g. 0, 1, 2 or 3.
@@ -134,24 +134,33 @@ class Card():
     Termination is equal to 1 for 50 Ohm and 0 for 1 MOhm
     '''            
     # Initializes acquisition settings
-    def acquisition_set(self, channel=1, memorylen=300e3, samplerate=30e6, 
+    def acquisition_set(self, channel=1, Ns=300e3, samplerate=30e6, 
                         timeout=10, fullrange=10, termination=Term.TERM_1M):
         timeout *= 1e3 # Convert to ms
-        self.memorylen = int(memorylen)
+        self.Ns = int(Ns)
+        if self.Ns % 4 != 0:
+            raise ValueError("Number of samples should be divisible by 4")
         self.samplerate = int(samplerate)
+        
+        if Ns / samplerate >= timeout:
+            raise ValueError("Timeout is shorter than acquisition time")
         
         # Factor for converting between ADC values and voltages
         self._conversion = 0
         
         # settings for the DMA buffer
-        self._qwBufferSize = sp.uint64(self.memorylen * 2 * 1); # in bytes. Enough memory  samples with 2 bytes each, only one channel active
+        self._qwBufferSize = sp.uint64(self.Ns * 2 * 1); # in bytes. Enough memory  samples with 2 bytes each, only one channel active
         self._lNotifySize = sp.int32(0); # driver should notify program after all data has been transfered
 
-        # Activate channel 0
-        sp.spcm_dwSetParam_i32 (self._hCard, sp.SPC_MEMSIZE,        self.memorylen)                  # acquire 16 kS in total
-        sp.spcm_dwSetParam_i32 (self._hCard, sp.SPC_POSTTRIGGER,    60000)                   # half of the total number of samples after trigger event
-        sp.spcm_dwSetParam_i32 (self._hCard, sp.SPC_CARDMODE,       sp.SPC_REC_STD_SINGLE)     # single trigger standard mode
-        sp.spcm_dwSetParam_i32 (self._hCard, sp.SPC_TIMEOUT,        sp.int32(int(timeout)))                  # in ms
+        # Set number of samples per channel
+        self._set32(sp.SPC_MEMSIZE, self.Ns)
+        
+        # All samples should be after the trigger (-4 is necessary)
+        self._set32(sp.SPC_POSTTRIGGER, self.Ns - 4)
+        
+        # Single trigger, standard mode
+        self._set32(sp.SPC_CARDMODE, sp.SPC_REC_STD_SINGLE)
+        self._set32(sp.SPC_TIMEOUT, int(timeout))                  # in ms
         sp.spcm_dwSetParam_i32 (self._hCard, sp.SPC_TRIG_ORMASK,    sp.SPC_TMASK_SOFTWARE)     # trigger set to software
         sp.spcm_dwSetParam_i32 (self._hCard, sp.SPC_TRIG_ANDMASK,   0)                      # ...
         #sp.spcm_dwSetParam_i32 (self._hCard, sp.SPC_CLOCKMODE,      sp.SPC_CM_INTPLL)         # clock mode internal PLL

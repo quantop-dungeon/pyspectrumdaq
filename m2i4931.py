@@ -155,9 +155,13 @@ class Card():
         # Factor for converting between ADC values and voltages
         self._conversion = 0
         
-        # settings for the DMA buffer
-        self._qwBufferSize = sp.uint64(self.Ns * 2 * 1); # in bytes. Enough memory  samples with 2 bytes each, only one channel active
-        self._lNotifySize = sp.int32(0); # driver should notify program after all data has been transfered
+        # Settings for the DMA buffer
+        # Buffer size in bytes. Enough memory samples with 2 bytes each, 
+        # only one channel active
+        self._qwBufferSize = sp.uint64(self.Ns * 2 * 1); 
+        
+        # Driver should notify program after all data has been transfered
+        self._lNotifySize = sp.int32(0); 
 
         # Set number of samples per channel
         self._set32(sp.SPC_MEMSIZE, self.Ns)
@@ -192,7 +196,10 @@ class Card():
         # we try to use continuous memory if available and big enough
         self._pvBuffer = sp.c_void_p ()
         self._qwContBufLen = sp.uint64(0)
-        sp.spcm_dwGetContBuf_i64 (self._hCard, sp.SPCM_BUF_DATA, sp.byref(self._pvBuffer), sp.byref(self._qwContBufLen))
+        sp.spcm_dwGetContBuf_i64 (self._hCard, 
+                                  sp.SPCM_BUF_DATA, 
+                                  sp.byref(self._pvBuffer), 
+                                  sp.byref(self._qwContBufLen))
         #sys.stdout.write ("ContBuf length: {0:d}\n".format(self._qwContBufLen.value))
         if self._qwContBufLen.value >= self._qwBufferSize.value:
             sys.stdout.write("Using continuous buffer\n")
@@ -200,7 +207,10 @@ class Card():
             self._pvBuffer = sp.create_string_buffer (self._qwBufferSize.value)
             #sys.stdout.write("Using buffer allocated by user program\n")
 
-        sp.spcm_dwDefTransfer_i64 (self._hCard, sp.SPCM_BUF_DATA, sp.SPCM_DIR_CARDTOPC, self._lNotifySize, self._pvBuffer, sp.uint64(0), self._qwBufferSize)
+        sp.spcm_dwDefTransfer_i64 (self._hCard, sp.SPCM_BUF_DATA, 
+                                   sp.SPCM_DIR_CARDTOPC, self._lNotifySize, 
+                                   self._pvBuffer, sp.uint64(0), 
+                                   self._qwBufferSize)
 
 
     '''
@@ -208,21 +218,26 @@ class Card():
     '''
     def acquire(self):
         # Reset buffer
-        sp.spcm_dwDefTransfer_i64 (self._hCard, sp.SPCM_BUF_DATA, sp.SPCM_DIR_CARDTOPC, self._lNotifySize, self._pvBuffer, sp.uint64(0), self._qwBufferSize)
+        sp.spcm_dwDefTransfer_i64 (self._hCard, sp.SPCM_BUF_DATA, 
+                                   sp.SPCM_DIR_CARDTOPC, 
+                                   self._lNotifySize, self._pvBuffer, 
+                                   sp.uint64(0), self._qwBufferSize)
 
         # start card and DMA
-        start_cmd = sp.M2CMD_CARD_START | sp.M2CMD_CARD_ENABLETRIGGER |  sp.M2CMD_DATA_STARTDMA
+        start_cmd = sp.M2CMD_CARD_START | sp.M2CMD_CARD_ENABLETRIGGER \
+        |  sp.M2CMD_DATA_STARTDMA
         dwError = self._set32(sp.SPC_M2CMD, start_cmd)
 
         # check for error
         szErrorTextBuffer = sp.create_string_buffer(sp.ERRORTEXTLEN)
         if dwError != sp.ERR_OK:
-            sp.spcm_dwGetErrorInfo_i32 (self._hCard, None, None, szErrorTextBuffer)
+            sp.spcm_dwGetErrorInfo_i32 (self._hCard, None, None, 
+                                        szErrorTextBuffer)
             print("{0}\n".format(szErrorTextBuffer.value))
             self.close()
             exit()
 
-        # wait until acquisition has finished, then calculated min and max
+        # Wait until acquisition has finished, then return data
         else:
             dwError = self._set32(sp.SPC_M2CMD, sp.M2CMD_CARD_WAITREADY)
             if dwError != sp.ERR_OK:
@@ -232,17 +247,18 @@ class Card():
                     print("... Error: {0:d}\n".format(dwError))
 
             else:
-                pnData = sp.cast(self._pvBuffer, sp.ptr16) # cast to pointer to 16bit integer
-                # Convert the array of data into a numpy array while also converting it to volts
-                #a = np.fromiter(pnData, dtype=np.int16, count=int(self._qwBufferSize.value/2)).astype(float)*self._conversion
+                # Cast data pointer to pointer to 16bit integers
+                pnData = sp.cast(self._pvBuffer, sp.ptr16) 
+                # Convert the array of data into a numpy array while also 
+                # converting it to volts
                 b = np.ctypeslib.as_array(pnData, shape=(int(self.Ns),))
-                a = b.astype(float)*self._conversion
+                a = b.astype(np.float64)*self._conversion
 
                 return a
 
 if __name__ == '__main__':
     card = Card()
-    card.acquisition_set(memorylen=30e6)#, samplerate=30e6, timeout=10e3, channel=1, fullrange=200, termination=1)
+    card.acquisition_set(memorylen=30e6)
     for i in range(10):
         a = card.acquire()
         print(a[0])

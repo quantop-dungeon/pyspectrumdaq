@@ -102,35 +102,51 @@ class Card():
     def reset(self):
         sp.spcm_dwSetParam_i32(self._hCard, sp.SPC_M2CMD, sp.M2CMD_CARD_RESET)
         
-    # Initialize one channel (full range in Volts)
-    def ch_init(self, ch_n=1, termination=Term.TERM_1M, fullrange=10):
-        # Check that the channel number if correct
-        if ch_n not in range(4):
-            raise ValueError("The specified channel number is invalid")
+    """
+    Initialize channels.
+    ch_nums is a list of channel numbers to initialize
+    terminations is a list of terminations to use with these channels
+    fullranges is a list of ranges for these channels
+    The three lists have to have the same length
+    """
+    def ch_init(self, ch_nums=[1], terminations=[Term.TERM_1M], 
+                fullranges=[10]):
+        # Check that the channel numbers are correct
+        if not np.all(np.isin(ch_nums, range(4))):
+            raise ValueError("Some channel numbers are invalid")
             
-        # Enable that channel
-        chan_param = getattr(sp, "CHANNEL{0:d}".format(int(ch_n)))
-        self._set32(sp.SPC_CHENABLE, chan_param)
+        # Enable these channels by creating a CHENABLE mask and applying it
+        chan_mask = 0
         
-        fullrange_val = int(fullrange * 1000)
-        if fullrange_val in [200,500,1000,2000,5000,10000]:
-            range_param = getattr(sp, "SPC_AMP{0:d}".format(int(ch_n)))
-            self._set32(range_param, fullrange_val);            
-            maxadc = self._get32(sp.SPC_MIINST_MAXADCVALUE)
-            self._maxadc = maxadc.value
-            self._conversion = float(fullrange_val)/1000 / self._maxadc
-        else:
-            raise ValueError("The specified voltage range is invalid")
-        
-        if termination == Term.TERM_1M:
-            term_val = 0
-        elif termination == Term.TERM_50:
-            term_val = 1
-        else:
-            raise ValueError("The specified termination is invalid")
+        for ch_n in ch_nums:
+            chan_mask |= getattr(sp, "CHANNEL{0:d}".format(int(ch_n)))
             
-        term_param = getattr(sp, "SPC_50OHM{0:d}".format(int(ch_n)))
-        self._set32(term_param, term_val)
+        self._set32(sp.SPC_CHENABLE, chan_mask)
+        
+        for i in range(len(ch_nums)):
+            ch_n = ch_nums[i]
+            fullrange_val = int(fullranges[i] * 1000)
+            termination = terminations[i]
+            
+            if fullrange_val in [200,500,1000,2000,5000,10000]:
+                range_param = getattr(sp, "SPC_AMP{0:d}".format(int(ch_n)))
+                self._set32(range_param, fullrange_val);            
+                maxadc = self._get32(sp.SPC_MIINST_MAXADCVALUE)
+                self._maxadc = maxadc.value
+                conversion = float(fullrange_val)/1000 / self._maxadc
+                self._conversions[i] = conversion
+            else:
+                raise ValueError("The specified voltage range is invalid")
+            
+            if termination == Term.TERM_1M:
+                term_val = 0
+            elif termination == Term.TERM_50:
+                term_val = 1
+            else:
+                raise ValueError("The specified termination is invalid")
+                
+            term_param = getattr(sp, "SPC_50OHM{0:d}".format(int(ch_n)))
+            self._set32(term_param, term_val)
 
     '''
     Specify number of samples (per channel).
@@ -141,24 +157,28 @@ class Card():
     Termination is equal to 1 for 50 Ohm and 0 for 1 MOhm
     '''            
     # Initializes acquisition settings
-    def acquisition_set(self, channel=1, Ns=300e3, samplerate=30e6, 
-                        timeout=10, fullrange=10, termination=Term.TERM_1M):
+    def acquisition_set(self, channels=[1], Ns=300e3, samplerate=30e6, 
+                        timeout=10, fullranges=[10], 
+                        terminations=[Term.TERM_1M]):
         timeout *= 1e3 # Convert to ms
         self.Ns = int(Ns)
         if self.Ns % 4 != 0:
             raise ValueError("Number of samples should be divisible by 4")
         self.samplerate = int(samplerate)
         
+        self.Nchannels = len(channels)
+        
         if Ns / samplerate >= timeout:
             raise ValueError("Timeout is shorter than acquisition time")
         
-        # Factor for converting between ADC values and voltages
-        self._conversion = 0
+        # Factors for converting between ADC values and voltages (for all 
+        # enabled channels)
+        self._conversions = np.zeros(self.Nchannels)
         
         # Settings for the DMA buffer
         # Buffer size in bytes. Enough memory samples with 2 bytes each, 
         # only one channel active
-        self._qwBufferSize = sp.uint64(self.Ns * 2 * 1); 
+        self._qwBufferSize = sp.uint64(self.Ns * 2 * self.Nchannels); 
         
         # Driver should notify program after all data has been transfered
         self._lNotifySize = sp.int32(0); 
@@ -190,7 +210,7 @@ class Card():
         self._set64(sp.SPC_SAMPLERATE, self.samplerate)
 
         # Choose channel
-        self.ch_init(channel, termination, fullrange)
+        self.ch_init(channels, terminations, fullranges)
 
         # define the data buffer
         # we try to use continuous memory if available and big enough
@@ -249,10 +269,16 @@ class Card():
             else:
                 # Cast data pointer to pointer to 16bit integers
                 pnData = sp.cast(self._pvBuffer, sp.ptr16) 
-                # Convert the array of data into a numpy array while also 
-                # converting it to volts
-                b = np.ctypeslib.as_array(pnData, shape=(int(self.Ns),))
-                a = b.astype(np.float64)*self._conversion
+                
+                # Convert the array of data into a numpy array
+                data = np.ctypeslib.as_array(pnData, shape=(int(self.Ns),))
+                
+                # Convert it into a matrix where the number of cols is the
+                # number of channels
+                out = np.empty((self.Ns, self.Nchannels), dtype=np.float64)
+                for i in range(self.Nchannels):
+                    data_slice = data[i::self.Nchannels]
+                    out[:,i] = data_slice.astype(np.float64)*self._conversions[i]
 
                 return a
 

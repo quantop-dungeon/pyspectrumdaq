@@ -280,7 +280,7 @@ class Card():
                     data_slice = data[i::self.Nchannels]
                     out[:,i] = data_slice.astype(np.float64)*self._conversions[i]
 
-                return a
+                return out
 
 if __name__ == '__main__':
     card = Card()

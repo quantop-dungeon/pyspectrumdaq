@@ -112,7 +112,8 @@ class Card():
     def ch_init(self, ch_nums=[1], terminations=[Term.TERM_1M], 
                 fullranges=[10]):
         # Check that the channel numbers are correct
-        if not np.all(np.isin(ch_nums, range(4))):
+        #if not np.all(np.isin(ch_nums, range(4))):
+        if not np.all([(ch_n in range(4)) for ch_n in ch_nums]):    
             raise ValueError("Some channel numbers are invalid")
             
         # Enable these channels by creating a CHENABLE mask and applying it
@@ -283,11 +284,11 @@ class Card():
 
                 return out
 
-if __name__ == '__main__':
-    card = Card()
-    card.acquisition_set(memorylen=30e6)
-    for i in range(10):
-        a = card.acquire()
-        print(a[0])
-    card.close()
+#if __name__ == '__main__':
+#    card = Card()
+#    card.acquisition_set(memorylen=30e6)
+#    for i in range(1):
+#        a = card.acquire()
+#        print(a[0])
+#    card.close()
     

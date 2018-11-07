@@ -40,7 +40,7 @@ def szTypeToName (lCardType):
 def chan_from_num(chan_n):
     return getattr(sp, "CHANNEL{0:d}".format(int(chan_n)))
 
-class Card():
+class Card(object):
     def _get32(self, param, uint=False):
         if not uint:
             destination = sp.int32(0)
@@ -93,6 +93,10 @@ class Card():
 
         # Reset the card to prevent undefined behaviour
         self.reset()
+        
+        # Factors for converting between ADC values and voltages (for all 
+        # enabled channels)
+        self._conversions = np.zeros(self.Nchannels)
 
     # Close connection to DAQ card
     def close(self):
@@ -172,10 +176,6 @@ class Card():
         if Ns / samplerate >= timeout:
             raise ValueError("Timeout is shorter than acquisition time")
         
-        # Factors for converting between ADC values and voltages (for all 
-        # enabled channels)
-        self._conversions = np.zeros(self.Nchannels)
-        
         # Settings for the DMA buffer
         # Buffer size in bytes. Enough memory samples with 2 bytes each, 
         # only one channel active
@@ -195,10 +195,6 @@ class Card():
         
         # Set timeout value
         self._set32(sp.SPC_TIMEOUT, int(timeout))
-        
-        # Trigger set to software
-        self._set32(sp.SPC_TRIG_ORMASK, sp.SPC_TMASK_SOFTWARE)
-        self._set32(sp.SPC_TRIG_ANDMASK, 0)                 
         
         # Set internal clock
         #sp.spcm_dwSetParam_i32 (self._hCard, sp.SPC_CLOCKMODE,      sp.SPC_CM_INTPLL)         # clock mode internal PLL
@@ -233,6 +229,33 @@ class Card():
                                    self._pvBuffer, sp.uint64(0), 
                                    self._qwBufferSize)
 
+    def trigger_set(self, mode="soft", channel=0, edge="pos", level=0):
+        """
+        Set triggering mode. Can be either "software", i.e. immediate free-run,
+        or on a rising or falling edge of one of the channels
+        """
+        if mode == "soft":
+            # Trigger set to software
+            self._set32(sp.SPC_TRIG_ORMASK, sp.SPC_TMASK_SOFTWARE)
+            self._set32(sp.SPC_TRIG_ANDMASK, 0)
+            return
+            
+        elif mode == "chan":
+            maskname = "SPC_TMASK0_CH{0:d}".format(int(channel))
+            modereg = "SPC_TRIG_CH{0:d}_MODE".format(int(channel))
+            
+            chmask = getattr(sp, maskname)
+            
+            self._set32(sp.SPC_TRIG_ORMASK, 0)
+            self._set32(sp.SPC_TRIG_ANDMASK, 0)
+            self._set32(sp.SPC_TRIG_CH_ORMASK0, chmask)
+            
+            if edge == "pos":
+                self._set32(modereg, sp.SPC_TM_POS)
+            elif edge == "neg":
+                self._set32(modereg, sp.SPC_TM_NEG)
+            else:
+                raise ValueError("Incorrect edge specification")
 
     '''
     Acquire time trace without time axis

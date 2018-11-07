@@ -65,15 +65,7 @@ class Card(object):
     
     # Connect to DAQ card
     def __init__(self):
-#        szErrorTextBuffer = sp.create_string_buffer (sp.ERRORTEXTLEN)
-#        dwError = sp.uint32 ();
-#        lStatus = sp.int32()
-#        lAvailUser = sp.int32()
-#        lPCPos = sp.int32()
-#        qwTotalMem = sp.uint64(0);
-#        qwToTransfer = sp.uint64(sp.MEGA_B(8));
-        
-        # open card
+        # Open card
         self._hCard = sp.spcm_hOpen ("/dev/spcm0");
         if self._hCard == None:
             print("No card found...")
@@ -93,10 +85,6 @@ class Card(object):
 
         # Reset the card to prevent undefined behaviour
         self.reset()
-        
-        # Factors for converting between ADC values and voltages (for all 
-        # enabled channels)
-        self._conversions = np.zeros(self.Nchannels)
 
     # Close connection to DAQ card
     def close(self):
@@ -115,10 +103,14 @@ class Card(object):
     """
     def ch_init(self, ch_nums=[1], terminations=[Term.TERM_1M], 
                 fullranges=[10]):
+        
         # Check that the channel numbers are correct
-        #if not np.all(np.isin(ch_nums, range(4))):
-        if not np.all([(ch_n in range(4)) for ch_n in ch_nums]):    
+        if not all([(ch_n in range(4)) for ch_n in ch_nums]):    
             raise ValueError("Some channel numbers are invalid")
+            
+        # Create a set of conversions: factors for converting between ADC 
+        # values and voltages (for all enabled channels)
+        self._conversions = np.zeros(len(ch_nums))
             
         # Enable these channels by creating a CHENABLE mask and applying it
         chan_mask = 0

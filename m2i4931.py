@@ -9,13 +9,15 @@ from enum import Enum
 
 # import spectrum driver functions
 import pyspectrumdaq.Spectrum_M2i4931_pydriver.pyspcm as sp
+    
+class CardError(Exception):
+    """ Base class for card errors """
+    
+class CardInaccessibleError(CardError):
+    pass
 
-# Some useful constants
-
-# Terminations enum
-class Term(Enum):
-    TERM_50 = 0
-    TERM_1M = 1
+class CardIncompatibleError(CardError):
+    pass
 
 # Function for card name translation
 def szTypeToName (lCardType):
@@ -66,10 +68,10 @@ class Card(object):
     # Connect to DAQ card
     def __init__(self):
         # Open card
-        self._hCard = sp.spcm_hOpen ("/dev/spcm0");
+        self._hCard = sp.spcm_hOpen("/dev/spcm0")
         if self._hCard == None:
-            print("No card found...")
-            exit()
+            msg = "Card not found or not accessible. Try closing other software that might be using it"
+            raise CardInaccessibleError(msg)
 
         # read type, function and sn and check for A/D card
         lCardType = self._get32(sp.SPC_PCITYP)
@@ -78,10 +80,10 @@ class Card(object):
 
         sCardName = szTypeToName(lCardType.value)
         if lFncType.value == sp.SPCM_TYPE_AI:
-            print("Found: {0} sn {1:05d}\n".format(sCardName,lSerialNumber.value))
+            print("Found: {0} sn {1:05d}".format(sCardName,lSerialNumber.value))
         else:
-            print("Card: {0} sn {1:05d} not supported by example\n".format(sCardName,lSerialNumber.value))
-            exit()
+            msg = "Card is inaccessible (try closing other apps) or not supported"
+            raise CardIncompatibleError(msg)
 
         # Reset the card to prevent undefined behaviour
         self.reset()
@@ -101,7 +103,7 @@ class Card(object):
     fullranges is a list of ranges for these channels
     The three lists have to have the same length
     """
-    def ch_init(self, ch_nums=[1], terminations=[Term.TERM_1M], 
+    def ch_init(self, ch_nums=[1], terminations=["1M"], 
                 fullranges=[10]):
         
         # Check that the channel numbers are correct
@@ -135,9 +137,9 @@ class Card(object):
             else:
                 raise ValueError("The specified voltage range is invalid")
             
-            if termination == Term.TERM_1M:
+            if termination == "1M":
                 term_val = 0
-            elif termination == Term.TERM_50:
+            elif termination == "50":
                 term_val = 1
             else:
                 raise ValueError("The specified termination is invalid")
@@ -156,7 +158,7 @@ class Card(object):
     # Initializes acquisition settings
     def acquisition_set(self, channels=[1], Ns=300e3, samplerate=30e6, 
                         timeout=10, fullranges=[10], 
-                        terminations=[Term.TERM_1M]):
+                        terminations=["1M"]):
         timeout *= 1e3 # Convert to ms
         self.Ns = int(Ns)
         if self.Ns % 4 != 0:

@@ -87,6 +87,10 @@ class Card(object):
 
         # Reset the card to prevent undefined behaviour
         self.reset()
+        
+        # Create a set of conversions: factors for converting between ADC 
+        # values and voltages (for all enabled channels)
+        self._conversions = np.zeros(4)
 
     # Close connection to DAQ card
     def close(self):
@@ -95,6 +99,13 @@ class Card(object):
     # Reset the card to default settings
     def reset(self):
         sp.spcm_dwSetParam_i32(self._hCard, sp.SPC_M2CMD, sp.M2CMD_CARD_RESET)
+        
+    def __enter__(self):
+        self.reset()
+        return self
+    
+    def __exit__(self, *a):
+        self.close()
         
     """
     Initialize channels.
@@ -110,10 +121,6 @@ class Card(object):
         if not all([(ch_n in range(4)) for ch_n in ch_nums]):    
             raise ValueError("Some channel numbers are invalid")
             
-        # Create a set of conversions: factors for converting between ADC 
-        # values and voltages (for all enabled channels)
-        self._conversions = np.zeros(len(ch_nums))
-            
         # Enable these channels by creating a CHENABLE mask and applying it
         chan_mask = 0
         
@@ -122,18 +129,20 @@ class Card(object):
             
         self._set32(sp.SPC_CHENABLE, chan_mask)
         
-        for i in range(len(ch_nums)):
-            ch_n = ch_nums[i]
-            fullrange_val = int(fullranges[i] * 1000)
-            termination = terminations[i]
+        for ch_n, termination, fullrange in zip(ch_nums, terminations, 
+                                                fullranges):
+            ch_n = int(ch_n)
+            fullrange = int(fullrange * 1000)
             
-            if fullrange_val in [200,500,1000,2000,5000,10000]:
+            if fullrange in [200,500,1000,2000,5000,10000]:
                 range_param = getattr(sp, "SPC_AMP{0:d}".format(int(ch_n)))
-                self._set32(range_param, fullrange_val);            
+                self._set32(range_param, fullrange); 
+                
                 maxadc = self._get32(sp.SPC_MIINST_MAXADCVALUE)
                 self._maxadc = maxadc.value
-                conversion = float(fullrange_val)/1000 / self._maxadc
-                self._conversions[i] = conversion
+                
+                conversion = float(fullrange)/1000 / self._maxadc
+                self._conversions[ch_n] = conversion
             else:
                 raise ValueError("The specified voltage range is invalid")
             
@@ -165,7 +174,13 @@ class Card(object):
             raise ValueError("Number of samples should be divisible by 4")
         self.samplerate = int(samplerate)
         
-        self.Nchannels = len(channels)
+        #self.N_acq_channels = len(channels)
+        
+        # Sort all the arrays
+        sort_idx = np.argsort(channels)
+        self._acq_channels = np.array(channels)[sort_idx]
+        terminations = np.array(terminations)[sort_idx]
+        fullranges = np.array(fullranges)[sort_idx]
         
         if Ns / samplerate >= timeout:
             raise ValueError("Timeout is shorter than acquisition time")
@@ -173,7 +188,7 @@ class Card(object):
         # Settings for the DMA buffer
         # Buffer size in bytes. Enough memory samples with 2 bytes each, 
         # only one channel active
-        self._qwBufferSize = sp.uint64(self.Ns * 2 * self.Nchannels); 
+        self._qwBufferSize = sp.uint64(self.Ns * 2 * len(self._acq_channels)); 
         
         # Driver should notify program after all data has been transfered
         self._lNotifySize = sp.int32(0); 
@@ -201,7 +216,7 @@ class Card(object):
         self._set64(sp.SPC_SAMPLERATE, self.samplerate)
 
         # Choose channel
-        self.ch_init(channels, terminations, fullranges)
+        self.ch_init(self._acq_channels, terminations, fullranges)
 
         # define the data buffer
         # we try to use continuous memory if available and big enough
@@ -235,21 +250,37 @@ class Card(object):
             return
             
         elif mode == "chan":
-            maskname = "SPC_TMASK0_CH{0:d}".format(int(channel))
-            modereg = "SPC_TRIG_CH{0:d}_MODE".format(int(channel))
+            # The division by 4 is necessary because the trigger has 14-bit 
+            # resolution as compared to overall 16-bit resolution of the card
+            trigvalue = int(level/self._conversions[channel]/4)
             
-            chmask = getattr(sp, maskname)
+            # Check that the trigger level is within specified levels
+            if abs(trigvalue) >= self._maxadc/4:
+                raise ValueError("The specified trigger level is outside allowed values")
             
+            # Disable all other triggering
             self._set32(sp.SPC_TRIG_ORMASK, 0)
             self._set32(sp.SPC_TRIG_ANDMASK, 0)
+            self._set32(sp.SPC_TRIG_CH_ORMASK1, 0)
+            self._set32(sp.SPC_TRIG_CH_ANDMASK1, 0)
+            
+            # Enable the required trigger
+            maskname = "SPC_TMASK0_CH{0:d}".format(int(channel))
+            chmask = getattr(sp, maskname)
             self._set32(sp.SPC_TRIG_CH_ORMASK0, chmask)
             
+            # Mode is set to the required one
+            modereg = "SPC_TRIG_CH{0:d}_MODE".format(int(channel))
             if edge == "pos":
                 self._set32(modereg, sp.SPC_TM_POS)
             elif edge == "neg":
                 self._set32(modereg, sp.SPC_TM_NEG)
             else:
                 raise ValueError("Incorrect edge specification")
+                
+            # Finally, set the trigger level
+            levelreg = "SPC_TRIG_CH{0:d}_LEVEL0".format(int(channel))
+            self._set32(levelreg, trigvalue)
 
     '''
     Acquire time trace without time axis
@@ -289,15 +320,16 @@ class Card(object):
                 pnData = sp.cast(self._pvBuffer, sp.ptr16) 
                 
                 # Convert the array of data into a numpy array
-                total_samples = int(self.Ns*self.Nchannels)
+                total_samples = int(self.Ns*len(self._acq_channels))
                 data = np.ctypeslib.as_array(pnData, shape=(total_samples,))
                 
                 # Convert it into a matrix where the number of cols is the
                 # number of channels
-                out = np.empty((self.Ns, self.Nchannels), dtype=np.float64)
-                for i in range(self.Nchannels):
-                    data_slice = data[i::self.Nchannels]
-                    out[:,i] = data_slice.astype(np.float64)*self._conversions[i]
+                Nch = len(self._acq_channels)
+                out = np.empty((self.Ns, Nch), dtype=np.float64)
+                for i, ch_n in enumerate(self._acq_channels):
+                    data_slice = data[i::Nch]
+                    out[:,i] = data_slice.astype(np.float64)*self._conversions[ch_n]
 
                 return out
 

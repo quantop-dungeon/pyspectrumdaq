@@ -138,6 +138,7 @@ class Card(object):
                 range_param = getattr(sp, "SPC_AMP{0:d}".format(int(ch_n)))
                 self._set32(range_param, fullrange); 
                 
+                
                 maxadc = self._get32(sp.SPC_MIINST_MAXADCVALUE)
                 self._maxadc = maxadc.value
                 
@@ -214,6 +215,7 @@ class Card(object):
         
         # Set the sampling rate
         self._set64(sp.SPC_SAMPLERATE, self.samplerate)
+        
 
         # Choose channel
         self.ch_init(self._acq_channels, terminations, fullranges)
@@ -270,16 +272,20 @@ class Card(object):
             self._set32(sp.SPC_TRIG_CH_ORMASK0, chmask)
             
             # Mode is set to the required one
-            modereg = "SPC_TRIG_CH{0:d}_MODE".format(int(channel))
+            modereg_name = "SPC_TRIG_CH{0:d}_MODE".format(int(channel))
+            modereg = getattr(sp, modereg_name)
             if edge == "pos":
+                pass
                 self._set32(modereg, sp.SPC_TM_POS)
             elif edge == "neg":
+                pass
                 self._set32(modereg, sp.SPC_TM_NEG)
             else:
                 raise ValueError("Incorrect edge specification")
                 
             # Finally, set the trigger level
-            levelreg = "SPC_TRIG_CH{0:d}_LEVEL0".format(int(channel))
+            levelreg_name = "SPC_TRIG_CH{0:d}_LEVEL0".format(int(channel))
+            levelreg = getattr(sp, levelreg_name)
             self._set32(levelreg, trigvalue)
 
     '''

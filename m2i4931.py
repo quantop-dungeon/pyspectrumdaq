@@ -168,7 +168,7 @@ class Card(object):
     # Initializes acquisition settings
     def acquisition_set(self, channels=[1], Ns=300e3, samplerate=30e6, 
                         timeout=10, fullranges=[10], 
-                        terminations=["1M"]):
+                        terminations=["1M"], pretrig_ratio=0):
         timeout *= 1e3 # Convert to ms
         self.Ns = int(Ns)
         if self.Ns % 4 != 0:
@@ -198,7 +198,8 @@ class Card(object):
         self._set32(sp.SPC_MEMSIZE, self.Ns)
         
         # All samples should be after the trigger (-4 is necessary)
-        self._set32(sp.SPC_POSTTRIGGER, self.Ns - 4)
+        pretrig = np.clip(((self.Ns * pretrig_ratio) // 4) * 4, 4, self.Ns - 4)
+        self._set32(sp.SPC_POSTTRIGGER, self.Ns - int(pretrig))
         
         # Single trigger, standard mode
         self._set32(sp.SPC_CARDMODE, sp.SPC_REC_STD_SINGLE)

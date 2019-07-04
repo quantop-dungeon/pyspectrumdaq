@@ -7,6 +7,8 @@ import sys
 import numpy as np
 from enum import Enum
 
+import time
+
 # import spectrum driver functions
 import pyspectrumdaq.Spectrum_M2i4931_pydriver.pyspcm as sp
     
@@ -156,6 +158,8 @@ class Card(object):
                 
             term_param = getattr(sp, "SPC_50OHM{0:d}".format(int(ch_n)))
             self._set32(term_param, term_val)
+            
+            #print(f"Channel {ch_n} set up")
 
     '''
     Specify number of samples (per channel).
@@ -169,6 +173,10 @@ class Card(object):
     def acquisition_set(self, channels=[1], Ns=300e3, samplerate=30e6, 
                         timeout=10, fullranges=[10], 
                         terminations=["1M"], pretrig_ratio=0):
+        
+        if len(channels) not in [1, 2, 4]:
+            raise ValueError("Number of activated channels should be 1, 2 or 4 only")
+            
         timeout *= 1e3 # Convert to ms
         self.Ns = int(Ns)
         if self.Ns % 4 != 0:
@@ -293,17 +301,18 @@ class Card(object):
     Acquire time trace without time axis
     '''
     def acquire(self):
-        # Reset buffer
+        # Start card, enable trigger and wait until the acquisition has finished
+        start_cmd = sp.M2CMD_CARD_START | sp.M2CMD_CARD_ENABLETRIGGER \
+        |  sp.M2CMD_CARD_WAITREADY
+        dwError = self._set32(sp.SPC_M2CMD, start_cmd)
+
+        
+        # Setup memory transfer parameters
         sp.spcm_dwDefTransfer_i64 (self._hCard, sp.SPCM_BUF_DATA, 
                                    sp.SPCM_DIR_CARDTOPC, 
                                    self._lNotifySize, self._pvBuffer, 
                                    sp.uint64(0), self._qwBufferSize)
-
-        # start card and DMA
-        start_cmd = sp.M2CMD_CARD_START | sp.M2CMD_CARD_ENABLETRIGGER \
-        |  sp.M2CMD_DATA_STARTDMA
-        dwError = self._set32(sp.SPC_M2CMD, start_cmd)
-
+        
         # check for error
         szErrorTextBuffer = sp.create_string_buffer(sp.ERRORTEXTLEN)
         if dwError != sp.ERR_OK:
@@ -315,7 +324,7 @@ class Card(object):
 
         # Wait until acquisition has finished, then return data
         else:
-            dwError = self._set32(sp.SPC_M2CMD, sp.M2CMD_CARD_WAITREADY)
+            dwError = self._set32(sp.SPC_M2CMD, sp.M2CMD_DATA_STARTDMA | sp.M2CMD_DATA_WAITDMA)
             if dwError != sp.ERR_OK:
                 if dwError == sp.ERR_TIMEOUT:
                     print("... Timeout\n")

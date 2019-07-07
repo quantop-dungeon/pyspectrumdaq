@@ -195,8 +195,7 @@ class Card(object):
             raise ValueError("Timeout is shorter than acquisition time")
         
         # Settings for the DMA buffer
-        # Buffer size in bytes. Enough memory samples with 2 bytes each, 
-        # only one channel active
+        # Buffer size in bytes. Enough memory samples with 2 bytes each
         self._qwBufferSize = sp.uint64(self.Ns * 2 * len(self._acq_channels)); 
         
         # Driver should notify program after all data has been transfered
@@ -205,7 +204,7 @@ class Card(object):
         # Set number of samples per channel
         self._set32(sp.SPC_MEMSIZE, self.Ns)
         
-        # All samples should be after the trigger (-4 is necessary)
+        # Setting the posttrigger value which has to be a multiple of 4
         pretrig = np.clip(((self.Ns * pretrig_ratio) // 4) * 4, 4, self.Ns - 4)
         self._set32(sp.SPC_POSTTRIGGER, self.Ns - int(pretrig))
         
@@ -218,7 +217,7 @@ class Card(object):
         # Set internal clock
         #sp.spcm_dwSetParam_i32 (self._hCard, sp.SPC_CLOCKMODE,      sp.SPC_CM_INTPLL)         # clock mode internal PLL
         
-        # Set ecternal reference lock with 10 MHz frequency
+        # Set external reference lock with 10 MHz frequency
         self._set32(sp.SPC_CLOCKMODE, sp.SPC_CM_EXTREFCLOCK)
         self._set32(sp.SPC_REFERENCECLOCK, 10000000)
         
@@ -231,7 +230,7 @@ class Card(object):
 
         # define the data buffer
         # we try to use continuous memory if available and big enough
-        self._pvBuffer = sp.c_void_p ()
+        self._pvBuffer = sp.c_void_p()
         self._qwContBufLen = sp.uint64(0)
         sp.spcm_dwGetContBuf_i64 (self._hCard, 
                                   sp.SPCM_BUF_DATA, 
@@ -241,8 +240,7 @@ class Card(object):
         if self._qwContBufLen.value >= self._qwBufferSize.value:
             sys.stdout.write("Using continuous buffer\n")
         else:
-            self._pvBuffer = sp.create_string_buffer (self._qwBufferSize.value)
-            #sys.stdout.write("Using buffer allocated by user program\n")
+            self._pvBuffer = sp.create_string_buffer(self._qwBufferSize.value)
 
         sp.spcm_dwDefTransfer_i64 (self._hCard, sp.SPCM_BUF_DATA, 
                                    sp.SPCM_DIR_CARDTOPC, self._lNotifySize, 
@@ -300,7 +298,7 @@ class Card(object):
     '''
     Acquire time trace without time axis
     '''
-    def acquire(self):
+    def acquire(self, convert=True):
         # Start card, enable trigger and wait until the acquisition has finished
         start_cmd = sp.M2CMD_CARD_START | sp.M2CMD_CARD_ENABLETRIGGER \
         |  sp.M2CMD_CARD_WAITREADY
@@ -313,6 +311,7 @@ class Card(object):
                                    self._lNotifySize, self._pvBuffer, 
                                    sp.uint64(0), self._qwBufferSize)
         
+        
         # check for error
         szErrorTextBuffer = sp.create_string_buffer(sp.ERRORTEXTLEN)
         if dwError != sp.ERR_OK:
@@ -324,7 +323,9 @@ class Card(object):
 
         # Wait until acquisition has finished, then return data
         else:
-            dwError = self._set32(sp.SPC_M2CMD, sp.M2CMD_DATA_STARTDMA | sp.M2CMD_DATA_WAITDMA)
+            dwError = self._set32(sp.SPC_M2CMD, sp.M2CMD_DATA_STARTDMA |
+                    sp.M2CMD_DATA_WAITDMA)
+            
             if dwError != sp.ERR_OK:
                 if dwError == sp.ERR_TIMEOUT:
                     print("... Timeout\n")
@@ -339,15 +340,30 @@ class Card(object):
                 total_samples = int(self.Ns*len(self._acq_channels))
                 data = np.ctypeslib.as_array(pnData, shape=(total_samples,))
                 
+                
                 # Convert it into a matrix where the number of cols is the
                 # number of channels
                 Nch = len(self._acq_channels)
-                out = np.empty((self.Ns, Nch), dtype=np.float64)
+                
+                conv_out = []
+                
+                if convert:
+                    out = np.empty((self.Ns, Nch), dtype=np.float64)
+                else:
+                    out = np.empty((self.Ns, Nch), dtype=np.int16)
+                    
                 for i, ch_n in enumerate(self._acq_channels):
                     data_slice = data[i::Nch]
-                    out[:,i] = data_slice.astype(np.float64)*self._conversions[ch_n]
+                    if convert:
+                        out[:,i] = data_slice.astype(np.float64)*self._conversions[ch_n]
+                    else:
+                        out[:,i] = data_slice
+                        conv_out.append(self._conversions[ch_n])
 
-                return out
+                if convert:
+                    return out
+                else:
+                    return (conv_out, out)
 
 #if __name__ == '__main__':
 #    card = Card()

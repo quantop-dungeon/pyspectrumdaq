@@ -5,6 +5,7 @@ from __future__ import division
 
 import sys
 import numpy as np
+import numba
 from enum import Enum
 
 import time
@@ -43,6 +44,15 @@ def szTypeToName (lCardType):
 
 def chan_from_num(chan_n):
     return getattr(sp, "CHANNEL{0:d}".format(int(chan_n)))
+    
+@numba.jit(nopython=True, parallel=True)            
+def _convert(out, x, convs):
+    """ Convert a int16 2D numpy array (N, ch) into a 2D float64 array with 
+    some conversion factors. Uses preallocated arrays
+    """
+    for ch in numba.prange(out.shape[1]):
+        for n in numba.prange(out.shape[0]):
+            out[n, ch] = x[n, ch] * convs[ch]
 
 class Card(object):
     def _get32(self, param, uint=False):
@@ -299,17 +309,17 @@ class Card(object):
     Acquire time trace without time axis
     '''
     def acquire(self, convert=True):
-        # Start card, enable trigger and wait until the acquisition has finished
-        start_cmd = sp.M2CMD_CARD_START | sp.M2CMD_CARD_ENABLETRIGGER \
-        |  sp.M2CMD_CARD_WAITREADY
-        dwError = self._set32(sp.SPC_M2CMD, start_cmd)
-
-        
         # Setup memory transfer parameters
         sp.spcm_dwDefTransfer_i64 (self._hCard, sp.SPCM_BUF_DATA, 
                                    sp.SPCM_DIR_CARDTOPC, 
                                    self._lNotifySize, self._pvBuffer, 
                                    sp.uint64(0), self._qwBufferSize)
+        
+        # Start card, enable trigger and wait until the acquisition has finished
+        start_cmd = sp.M2CMD_CARD_START | sp.M2CMD_CARD_ENABLETRIGGER |\
+        sp.M2CMD_CARD_WAITREADY | sp.M2CMD_DATA_STARTDMA | \
+        sp.M2CMD_DATA_WAITDMA
+        dwError = self._set32(sp.SPC_M2CMD, start_cmd)
         
         
         # check for error
@@ -322,54 +332,41 @@ class Card(object):
             exit()
 
         # Wait until acquisition has finished, then return data
-        else:
-            dwError = self._set32(sp.SPC_M2CMD, sp.M2CMD_DATA_STARTDMA |
-                    sp.M2CMD_DATA_WAITDMA)
+        # Cast data pointer to pointer to 16bit integers
+        pnData = sp.cast(self._pvBuffer, sp.ptr16) 
+        
+        # Convert the array of data into a numpy array
+        # The array is already properly ordered, so we can already
+        # give it the right shape
+        Nch = len(self._acq_channels)
+        data = np.ctypeslib.as_array(pnData, shape=(self.Ns, Nch))
+        
+        # Conversion factors for active channels
+        conv_out = [self._conversions[ch_n] for ch_n in self._acq_channels]
+        
+        if convert:
+            out = np.zeros((self.Ns, Nch), dtype=np.float64)
+#            for i, ch_n in enumerate(self._acq_channels):
+#                out[:,i] = out[:,i]*self._conversions[ch_n]
+            return out
             
-            if dwError != sp.ERR_OK:
-                if dwError == sp.ERR_TIMEOUT:
-                    print("... Timeout\n")
-                else:
-                    print("... Error: {0:d}\n".format(dwError))
+        # Return a copy of the array to prevent it from being
+        # overwritten by DMA
+        if not convert:
+            return (conv_out, data.copy())
+        else:
+            _convert(out, data, conv_out)
+            return out
 
-            else:
-                # Cast data pointer to pointer to 16bit integers
-                pnData = sp.cast(self._pvBuffer, sp.ptr16) 
-                
-                # Convert the array of data into a numpy array
-                total_samples = int(self.Ns*len(self._acq_channels))
-                data = np.ctypeslib.as_array(pnData, shape=(total_samples,))
-                
-                
-                # Convert it into a matrix where the number of cols is the
-                # number of channels
-                Nch = len(self._acq_channels)
-                
-                conv_out = []
-                
-                if convert:
-                    out = np.empty((self.Ns, Nch), dtype=np.float64)
-                else:
-                    out = np.empty((self.Ns, Nch), dtype=np.int16)
-                    
-                for i, ch_n in enumerate(self._acq_channels):
-                    data_slice = data[i::Nch]
-                    if convert:
-                        out[:,i] = data_slice.astype(np.float64)*self._conversions[ch_n]
-                    else:
-                        out[:,i] = data_slice
-                        conv_out.append(self._conversions[ch_n])
-
-                if convert:
-                    return out
-                else:
-                    return (conv_out, out)
-
-#if __name__ == '__main__':
-#    card = Card()
-#    card.acquisition_set(memorylen=30e6)
-#    for i in range(1):
-#        a = card.acquire()
-#        print(a[0])
-#    card.close()
-    
+if __name__ == '__main__':
+    with Card() as adc:
+        adc.acquisition_set(channels=[0, 1, 2, 3], 
+                            terminations=["1M", "1M", "50", "1M"], 
+                            fullranges=[2, 2, 2, 2],
+                            pretrig_ratio=0, 
+                            Ns=10**6,
+                            samplerate=10**6)             
+        adc.trigger_set(mode="soft")
+        
+        a = adc.acquire()
+        print(a[0])

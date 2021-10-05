@@ -6,12 +6,9 @@ from __future__ import division
 import sys
 import numpy as np
 import numba
-from enum import Enum
-
-import time
 
 # import spectrum driver functions
-import pyspectrumdaq.Spectrum_M2i4931_pydriver.pyspcm as sp
+import pyspcm as sp
     
 class CardError(Exception):
     """ Base class for card errors """
@@ -22,24 +19,26 @@ class CardInaccessibleError(CardError):
 class CardIncompatibleError(CardError):
     pass
 
-# Function for card name translation
-def szTypeToName (lCardType):
-    sName = ''
+def szTypeToName(lCardType):
+    """A vendor-supplied function for card name translation."""
     lVersion = (lCardType & sp.TYP_VERSIONMASK)
-    if (lCardType & sp.TYP_SERIESMASK) == sp.TYP_M2ISERIES:
+    lType = (lCardType & sp.TYP_SERIESMASK )
+
+    if lType == sp.TYP_M2ISERIES:
         sName = 'M2i.%04x'%lVersion
-    elif (lCardType & sp.TYP_SERIESMASK) == sp.TYP_M2IEXPSERIES:
+    elif lType == sp.TYP_M2IEXPSERIES:
         sName = 'M2i.%04x-Exp'%lVersion
-    elif (lCardType & sp.TYP_SERIESMASK) == sp.TYP_M3ISERIES:
+    elif lType == sp.TYP_M3ISERIES:
         sName = 'M3i.%04x'%lVersion
-    elif (lCardType & sp.TYP_SERIESMASK) == sp.TYP_M3IEXPSERIES:
+    elif lType == sp.TYP_M3IEXPSERIES:
         sName = 'M3i.%04x-Exp'%lVersion
-    elif (lCardType & sp.TYP_SERIESMASK) == sp.TYP_M4IEXPSERIES:
+    elif lType == sp.TYP_M4IEXPSERIES:
         sName = 'M4i.%04x-x8'%lVersion
-    elif (lCardType & sp.TYP_SERIESMASK) == sp.TYP_M4XEXPSERIES:
+    elif lType == sp.TYP_M4XEXPSERIES:
         sName = 'M4x.%04x-x4'%lVersion
     else:
-        sName = 'unknown type'
+        sName = ''
+
     return sName
 
 def chan_from_num(chan_n):
@@ -59,7 +58,7 @@ class Card(object):
         if not uint:
             destination = sp.int32(0)
         else:
-            destination = sp.int32(0)
+            destination = sp.uint32(0)
         sp.spcm_dwGetParam_i32(self._hCard, param, sp.byref(destination))
         return destination
     
@@ -119,15 +118,13 @@ class Card(object):
     def __exit__(self, *a):
         self.close()
         
-    """
-    Initialize channels.
-    ch_nums is a list of channel numbers to initialize
-    terminations is a list of terminations to use with these channels
-    fullranges is a list of ranges for these channels
-    The three lists have to have the same length
-    """
-    def ch_init(self, ch_nums=[1], terminations=["1M"], 
-                fullranges=[10]):
+    def ch_init(self, ch_nums=[1], terminations=["1M"], fullranges=[10]):
+        """ Initialize channels.
+        ch_nums is a list of channel numbers to initialize
+        terminations is a list of terminations to use with these channels
+        fullranges is a list of ranges for these channels
+        The three lists have to have the same length
+        """
         
         # Check that the channel numbers are correct
         if not all([(ch_n in range(4)) for ch_n in ch_nums]):    
@@ -168,21 +165,20 @@ class Card(object):
                 
             term_param = getattr(sp, "SPC_50OHM{0:d}".format(int(ch_n)))
             self._set32(term_param, term_val)
-            
-            #print(f"Channel {ch_n} set up")
-
-    '''
-    Specify number of samples (per channel).
-    Samplerate in Hz.
-    Timeout in ms.
-    Specify channel number as e.g. 0, 1, 2 or 3.
-    Fullrange is in V has to be equal to one of {0.2, 0.5, 1, 2, 5, 10}.
-    Termination is equal to 1 for 50 Ohm and 0 for 1 MOhm
-    '''            
-    # Initializes acquisition settings
+         
     def acquisition_set(self, channels=[1], Ns=300e3, samplerate=30e6, 
                         timeout=10, fullranges=[10], 
                         terminations=["1M"], pretrig_ratio=0):
+        '''
+        Initializes acquisition settings
+
+        Specify number of samples (per channel).
+        Samplerate in Hz.
+        Timeout in ms.
+        Specify channel number as e.g. 0, 1, 2 or 3.
+        Fullrange is in V has to be equal to one of {0.2, 0.5, 1, 2, 5, 10}.
+        Termination is equal to 1 for 50 Ohm and 0 for 1 MOhm
+        '''   
         
         if len(channels) not in [1, 2, 4]:
             raise ValueError("Number of activated channels should be 1, 2 or 4 only")
@@ -292,10 +288,8 @@ class Card(object):
             modereg_name = "SPC_TRIG_CH{0:d}_MODE".format(int(channel))
             modereg = getattr(sp, modereg_name)
             if edge == "pos":
-                pass
                 self._set32(modereg, sp.SPC_TM_POS)
             elif edge == "neg":
-                pass
                 self._set32(modereg, sp.SPC_TM_NEG)
             else:
                 raise ValueError("Incorrect edge specification")
@@ -305,10 +299,11 @@ class Card(object):
             levelreg = getattr(sp, levelreg_name)
             self._set32(levelreg, trigvalue)
 
-    '''
-    Acquire time trace without time axis
-    '''
     def acquire(self, convert=True):
+        '''
+        Acquire time trace without time axis
+        '''
+
         # Setup memory transfer parameters
         sp.spcm_dwDefTransfer_i64 (self._hCard, sp.SPCM_BUF_DATA, 
                                    sp.SPCM_DIR_CARDTOPC, 
@@ -320,7 +315,6 @@ class Card(object):
         sp.M2CMD_CARD_WAITREADY | sp.M2CMD_DATA_STARTDMA | \
         sp.M2CMD_DATA_WAITDMA
         dwError = self._set32(sp.SPC_M2CMD, start_cmd)
-        
         
         # check for error
         szErrorTextBuffer = sp.create_string_buffer(sp.ERRORTEXTLEN)
@@ -343,30 +337,12 @@ class Card(object):
         
         # Conversion factors for active channels
         conv_out = [self._conversions[ch_n] for ch_n in self._acq_channels]
-        
-        if convert:
-            out = np.zeros((self.Ns, Nch), dtype=np.float64)
-#            for i, ch_n in enumerate(self._acq_channels):
-#                out[:,i] = out[:,i]*self._conversions[ch_n]
-            return out
             
         # Return a copy of the array to prevent it from being
         # overwritten by DMA
         if not convert:
             return (conv_out, data.copy())
         else:
+            out = np.zeros((self.Ns, Nch), dtype=np.float64)
             _convert(out, data, conv_out)
             return out
-
-if __name__ == '__main__':
-    with Card() as adc:
-        adc.acquisition_set(channels=[0, 1, 2, 3], 
-                            terminations=["1M", "1M", "50", "1M"], 
-                            fullranges=[2, 2, 2, 2],
-                            pretrig_ratio=0, 
-                            Ns=10**6,
-                            samplerate=10**6)             
-        adc.trigger_set(mode="soft")
-        
-        a = adc.acquire()
-        print(a[0])

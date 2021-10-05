@@ -46,8 +46,9 @@ def chan_from_num(chan_n):
     
 @numba.jit(nopython=True, parallel=True)            
 def _convert(out, x, convs):
-    """ Convert a int16 2D numpy array (N, ch) into a 2D float64 array with 
-    some conversion factors. Uses preallocated arrays
+    """Convert an int16 2D numpy array (N, ch) into a 2D float64 array using 
+    the specified conversion factors and stores the result in a preallocated 
+    array.
     """
     for ch in numba.prange(out.shape[1]):
         for n in numba.prange(out.shape[0]):
@@ -76,10 +77,11 @@ class Card(object):
         else:
             return sp.spcm_dwSetParam_i64(self._hCard, param, sp.uint64(val))
     
-    # Connect to DAQ card
-    def __init__(self):
+    def __init__(self, address="/dev/spcm0"):
+        """Connect to DAQ card"""
+        
         # Open card
-        self._hCard = sp.spcm_hOpen("/dev/spcm0")
+        self._hCard = sp.spcm_hOpen(address)
         if self._hCard == None:
             msg = "Card not found or not accessible. Try closing other software that might be using it"
             raise CardInaccessibleError(msg)
@@ -103,12 +105,12 @@ class Card(object):
         # values and voltages (for all enabled channels)
         self._conversions = np.zeros(4)
 
-    # Close connection to DAQ card
     def close(self):
+        """Closes the connection to the DAQ card."""
         sp.spcm_vClose(self._hCard)
 
-    # Reset the card to default settings
     def reset(self):
+        """Resets the card to default settings."""
         sp.spcm_dwSetParam_i32(self._hCard, sp.SPC_M2CMD, sp.M2CMD_CARD_RESET)
         
     def __enter__(self):
@@ -147,7 +149,6 @@ class Card(object):
                 range_param = getattr(sp, "SPC_AMP{0:d}".format(int(ch_n)))
                 self._set32(range_param, fullrange); 
                 
-                
                 maxadc = self._get32(sp.SPC_MIINST_MAXADCVALUE)
                 self._maxadc = maxadc.value
                 
@@ -167,9 +168,10 @@ class Card(object):
             self._set32(term_param, term_val)
          
     def acquisition_set(self, channels=[1], Ns=300e3, samplerate=30e6, 
+                        clockmode = "int",
                         timeout=10, fullranges=[10], 
                         terminations=["1M"], pretrig_ratio=0):
-        '''
+        """
         Initializes acquisition settings
 
         Specify number of samples (per channel).
@@ -178,7 +180,7 @@ class Card(object):
         Specify channel number as e.g. 0, 1, 2 or 3.
         Fullrange is in V has to be equal to one of {0.2, 0.5, 1, 2, 5, 10}.
         Termination is equal to 1 for 50 Ohm and 0 for 1 MOhm
-        '''   
+        """  
         
         if len(channels) not in [1, 2, 4]:
             raise ValueError("Number of activated channels should be 1, 2 or 4 only")
@@ -188,8 +190,6 @@ class Card(object):
         if self.Ns % 4 != 0:
             raise ValueError("Number of samples should be divisible by 4")
         self.samplerate = int(samplerate)
-        
-        #self.N_acq_channels = len(channels)
         
         # Sort all the arrays
         sort_idx = np.argsort(channels)
@@ -220,16 +220,16 @@ class Card(object):
         # Set timeout value
         self._set32(sp.SPC_TIMEOUT, int(timeout))
         
-        # Set internal clock
-        #sp.spcm_dwSetParam_i32 (self._hCard, sp.SPC_CLOCKMODE,      sp.SPC_CM_INTPLL)         # clock mode internal PLL
-        
-        # Set external reference lock with 10 MHz frequency
-        self._set32(sp.SPC_CLOCKMODE, sp.SPC_CM_EXTREFCLOCK)
-        self._set32(sp.SPC_REFERENCECLOCK, 10000000)
+        if clockmode == "int":
+             # clock mode internal PLL
+            sp.spcm_dwSetParam_i32 (self._hCard, sp.SPC_CLOCKMODE, sp.SPC_CM_INTPLL) 
+        else:
+            # Set external reference lock with 10 MHz frequency
+            self._set32(sp.SPC_CLOCKMODE, sp.SPC_CM_EXTREFCLOCK)
+            self._set32(sp.SPC_REFERENCECLOCK, 10000000)
         
         # Set the sampling rate
         self._set64(sp.SPC_SAMPLERATE, self.samplerate)
-        
 
         # Choose channel
         self.ch_init(self._acq_channels, terminations, fullranges)
@@ -248,7 +248,7 @@ class Card(object):
         else:
             self._pvBuffer = sp.create_string_buffer(self._qwBufferSize.value)
 
-        sp.spcm_dwDefTransfer_i64 (self._hCard, sp.SPCM_BUF_DATA, 
+        sp.spcm_dwDefTransfer_i64(self._hCard, sp.SPCM_BUF_DATA, 
                                    sp.SPCM_DIR_CARDTOPC, self._lNotifySize, 
                                    self._pvBuffer, sp.uint64(0), 
                                    self._qwBufferSize)
@@ -259,12 +259,33 @@ class Card(object):
         or on a rising or falling edge of one of the channels
         """
         if mode == "soft":
-            # Trigger set to software
+            # Software trigger
+    
             self._set32(sp.SPC_TRIG_ORMASK, sp.SPC_TMASK_SOFTWARE)
             self._set32(sp.SPC_TRIG_ANDMASK, 0)
-            return
-            
+        elif mode == "ext":
+            # External trigger
+
+            # Disables all triggering.
+            self._set32(sp.SPC_TRIG_ORMASK, 0)
+            self._set32(sp.SPC_TRIG_ANDMASK, 0)
+            self._set32(sp.SPC_TRIG_CH_ORMASK1, 0)
+            self._set32(sp.SPC_TRIG_CH_ANDMASK1, 0)
+
+            # Enables the external trigger.
+            maskname = ("SPC_TMASK_EXT%i" % channel)
+            mask = getattr(sp, maskname)
+            self._set32(sp.SPC_TRIG_ANDMASK, mask)
+
+            modereg_name = ("SPC_TRIG_EXT%i_MODE" % channel)
+            modereg = getattr(sp, modereg_name)
+            if edge == "pos":
+                self._set32(modereg, sp.SPC_TM_POS)
+            elif edge == "neg":
+                self._set32(modereg, sp.SPC_TM_NEG)
         elif mode == "chan":
+            # Channel level trigger
+
             # The division by 4 is necessary because the trigger has 14-bit 
             # resolution as compared to overall 16-bit resolution of the card
             trigvalue = int(level/self._conversions[channel]/4)
@@ -300,9 +321,7 @@ class Card(object):
             self._set32(levelreg, trigvalue)
 
     def acquire(self, convert=True):
-        '''
-        Acquire time trace without time axis
-        '''
+        """Acquire time trace without time axis"""
 
         # Setup memory transfer parameters
         sp.spcm_dwDefTransfer_i64 (self._hCard, sp.SPCM_BUF_DATA, 
@@ -311,9 +330,9 @@ class Card(object):
                                    sp.uint64(0), self._qwBufferSize)
         
         # Start card, enable trigger and wait until the acquisition has finished
-        start_cmd = sp.M2CMD_CARD_START | sp.M2CMD_CARD_ENABLETRIGGER |\
-        sp.M2CMD_CARD_WAITREADY | sp.M2CMD_DATA_STARTDMA | \
-        sp.M2CMD_DATA_WAITDMA
+        start_cmd = (sp.M2CMD_CARD_START | sp.M2CMD_CARD_ENABLETRIGGER
+                     | sp.M2CMD_CARD_WAITREADY | sp.M2CMD_DATA_STARTDMA
+                     | sp.M2CMD_DATA_WAITDMA)
         dwError = self._set32(sp.SPC_M2CMD, start_cmd)
         
         # check for error
@@ -323,7 +342,7 @@ class Card(object):
                                         szErrorTextBuffer)
             print("{0}\n".format(szErrorTextBuffer.value))
             self.close()
-            exit()
+            return
 
         # Wait until acquisition has finished, then return data
         # Cast data pointer to pointer to 16bit integers

@@ -2,106 +2,47 @@
 from __future__ import print_function
 from __future__ import division
 
-
 import sys
 import numpy as np
 import numba
 
-# import spectrum driver functions
+# imports spectrum driver functions
 import pyspcm as sp
-    
-class CardError(Exception):
-    """ Base class for card errors """
-    
-class CardInaccessibleError(CardError):
-    pass
 
-class CardIncompatibleError(CardError):
-    pass
-
-def szTypeToName(lCardType):
-    """A vendor-supplied function for card name translation."""
-    lVersion = (lCardType & sp.TYP_VERSIONMASK)
-    lType = (lCardType & sp.TYP_SERIESMASK )
-
-    if lType == sp.TYP_M2ISERIES:
-        sName = 'M2i.%04x'%lVersion
-    elif lType == sp.TYP_M2IEXPSERIES:
-        sName = 'M2i.%04x-Exp'%lVersion
-    elif lType == sp.TYP_M3ISERIES:
-        sName = 'M3i.%04x'%lVersion
-    elif lType == sp.TYP_M3IEXPSERIES:
-        sName = 'M3i.%04x-Exp'%lVersion
-    elif lType == sp.TYP_M4IEXPSERIES:
-        sName = 'M4i.%04x-x8'%lVersion
-    elif lType == sp.TYP_M4XEXPSERIES:
-        sName = 'M4x.%04x-x4'%lVersion
-    else:
-        sName = ''
-
-    return sName
-
-def chan_from_num(chan_n):
-    return getattr(sp, "CHANNEL{0:d}".format(int(chan_n)))
-    
-@numba.jit(nopython=True, parallel=True)            
-def _convert(out, x, convs):
-    """Convert an int16 2D numpy array (N, ch) into a 2D float64 array using 
-    the specified conversion factors and stores the result in a preallocated 
-    array.
-    """
-    for ch in numba.prange(out.shape[1]):
-        for n in numba.prange(out.shape[0]):
-            out[n, ch] = x[n, ch] * convs[ch]
 
 class Card(object):
-    def _get32(self, param, uint=False):
-        if not uint:
-            destination = sp.int32(0)
-        else:
-            destination = sp.uint32(0)
-        sp.spcm_dwGetParam_i32(self._hCard, param, sp.byref(destination))
-        return destination
-    
-    def _set32(self, param, val, uint=False):
-        val = int(val)
-        if not uint:
-            return sp.spcm_dwSetParam_i32(self._hCard, param, sp.int32(val))
-        else:
-            return sp.spcm_dwSetParam_i32(self._hCard, param, sp.uint32(val))
-    
-    def _set64(self, param, val, uint=False):
-        val = int(val)
-        if not uint:
-            return sp.spcm_dwSetParam_i64(self._hCard, param, sp.int64(val))
-        else:
-            return sp.spcm_dwSetParam_i64(self._hCard, param, sp.uint64(val))
+    """A class for communication with a Spectrum Instrumentation M-series data 
+    acquisition card."""
     
     def __init__(self, address="/dev/spcm0"):
-        """Connect to DAQ card"""
-        
-        # Open card
+        """Connects to a DAQ card"""
+
+        # Opens card
         self._hCard = sp.spcm_hOpen(address)
         if self._hCard == None:
-            msg = "Card not found or not accessible. Try closing other software that might be using it"
+            msg = ("The card could not be open. Try closing other software "
+                   "that may be using it.")
             raise CardInaccessibleError(msg)
 
-        # read type, function and sn and check for A/D card
+        # Reads the type, function and serial number of the card.
         lCardType = self._get32(sp.SPC_PCITYP)
         lSerialNumber = self._get32(sp.SPC_PCISERIALNO)
         lFncType = self._get32(sp.SPC_FNCTYPE)
 
         sCardName = szTypeToName(lCardType.value)
-        if lFncType.value == sp.SPCM_TYPE_AI:
-            print("Found: {0} sn {1:05d}".format(sCardName,lSerialNumber.value))
-        else:
-            msg = "Card is inaccessible (try closing other apps) or not supported"
+        print("Found: {0} sn {1:05d}".format(sCardName, lSerialNumber.value))
+
+        # Checks if the card's type is analog input (AI).
+        if lFncType.value != sp.SPCM_TYPE_AI:
+            self.close()
+            msg = ("The card type (%i) is not AI (%i)." % (lFncType.value, 
+                                                           sp.SPCM_TYPE_AI))
             raise CardIncompatibleError(msg)
 
-        # Reset the card to prevent undefined behaviour
+        # Resets the card to prevent undefined behaviour.
         self.reset()
         
-        # Create a set of conversions: factors for converting between ADC 
+        # Creates a set of conversions: factors for converting between ADC 
         # values and voltages (for all enabled channels)
         self._conversions = np.zeros(4)
 
@@ -136,30 +77,29 @@ class Card(object):
         chan_mask = 0
         
         for ch_n in ch_nums:
-            chan_mask |= getattr(sp, "CHANNEL{0:d}".format(int(ch_n)))
+            chan_mask |= getattr(sp, "CHANNEL%i" % ch_n)
             
         self._set32(sp.SPC_CHENABLE, chan_mask)
         
-        for ch_n, termination, fullrange in zip(ch_nums, terminations, 
-                                                fullranges):
+        for ch_n, term, fullrng in zip(ch_nums, terminations, fullranges):
             ch_n = int(ch_n)
-            fullrange = int(fullrange * 1000)
+            fullrng = int(fullrng * 1000)
             
-            if fullrange in [200,500,1000,2000,5000,10000]:
+            if fullrng in [200, 500, 1000, 2000, 5000, 10000]:
                 range_param = getattr(sp, "SPC_AMP{0:d}".format(int(ch_n)))
-                self._set32(range_param, fullrange); 
+                self._set32(range_param, fullrng); 
                 
                 maxadc = self._get32(sp.SPC_MIINST_MAXADCVALUE)
                 self._maxadc = maxadc.value
                 
-                conversion = float(fullrange)/1000 / self._maxadc
+                conversion = float(fullrng) / 1000 / self._maxadc
                 self._conversions[ch_n] = conversion
             else:
-                raise ValueError("The specified voltage range is invalid")
+                raise ValueError("The specified voltage range is invalid.")
             
-            if termination == "1M":
+            if term == "1M":
                 term_val = 0
-            elif termination == "50":
+            elif term == "50":
                 term_val = 1
             else:
                 raise ValueError("The specified termination is invalid")
@@ -273,12 +213,10 @@ class Card(object):
             self._set32(sp.SPC_TRIG_CH_ANDMASK1, 0)
 
             # Enables the external trigger.
-            maskname = ("SPC_TMASK_EXT%i" % channel)
-            mask = getattr(sp, maskname)
+            mask = getattr(sp, "SPC_TMASK_EXT%i" % channel)
             self._set32(sp.SPC_TRIG_ANDMASK, mask)
 
-            modereg_name = ("SPC_TRIG_EXT%i_MODE" % channel)
-            modereg = getattr(sp, modereg_name)
+            modereg = getattr(sp, "SPC_TRIG_EXT%i_MODE" % channel)
             if edge == "pos":
                 self._set32(modereg, sp.SPC_TM_POS)
             elif edge == "neg":
@@ -295,7 +233,7 @@ class Card(object):
                 raise ValueError("The specified trigger level is outside allowed values")
             
             # Disable all other triggering
-            self._set32(sp.SPC_TRIG_ORMASK, 0)
+            self._set32(sp.SPC_TRIG_ORMASK, sp.SPC_TMASK_NONE)
             self._set32(sp.SPC_TRIG_ANDMASK, 0)
             self._set32(sp.SPC_TRIG_CH_ORMASK1, 0)
             self._set32(sp.SPC_TRIG_CH_ANDMASK1, 0)
@@ -365,3 +303,72 @@ class Card(object):
             out = np.zeros((self.Ns, Nch), dtype=np.float64)
             _convert(out, data, conv_out)
             return out
+
+
+    def _get32(self, reg):
+        """Gets the value of a 32-bit register. 
+        An alias for spcm_dwGetParam_i32."""
+        dst = sp.int32(0)
+        sp.spcm_dwGetParam_i32(self._hCard, reg, sp.byref(dst))
+        return dst
+
+    def _get64(self, reg):
+        """Gets the value of a 64-bit register. 
+        An alias for spcm_dwGetParam_i64."""
+        dst = sp.int64(0)
+        sp.spcm_dwGetParam_i64(self._hCard, reg, sp.byref(dst))
+        return dst
+    
+    def _set32(self, reg, val):
+        """Sets the value of a 32-bit register. 
+        An alias for spcm_dwSetParam_i32."""
+        return sp.spcm_dwSetParam_i32(self._hCard, reg, sp.int32(val))
+    
+    def _set64(self, reg, val):
+        """Sets the value of a 64-bit register. 
+        An alias for spcm_dwSetParam_i64."""    
+        return sp.spcm_dwSetParam_i64(self._hCard, reg, sp.int64(val))
+
+
+class CardError(Exception):
+    """ Base class for card errors """
+    
+class CardInaccessibleError(CardError):
+    pass
+
+class CardIncompatibleError(CardError):
+    pass
+
+def szTypeToName(lCardType):
+    """A vendor-supplied function for card name translation."""
+
+    lVersion = (lCardType & sp.TYP_VERSIONMASK)
+    lType = (lCardType & sp.TYP_SERIESMASK )
+
+    if lType == sp.TYP_M2ISERIES:
+        sName = 'M2i.%04x' % lVersion
+    elif lType == sp.TYP_M2IEXPSERIES:
+        sName = 'M2i.%04x-Exp' % lVersion
+    elif lType == sp.TYP_M3ISERIES:
+        sName = 'M3i.%04x' % lVersion
+    elif lType == sp.TYP_M3IEXPSERIES:
+        sName = 'M3i.%04x-Exp' % lVersion
+    elif lType == sp.TYP_M4IEXPSERIES:
+        sName = 'M4i.%04x-x8' % lVersion
+    elif lType == sp.TYP_M4XEXPSERIES:
+        sName = 'M4x.%04x-x4' % lVersion
+    else:
+        sName = ''
+
+    return sName
+
+    
+@numba.jit(nopython=True, parallel=True)            
+def _convert(out, x, convs):
+    """Convert an int16 2D numpy array (N, ch) into a 2D float64 array using 
+    the specified conversion factors and stores the result in a preallocated 
+    array.
+    """
+    for ch in numba.prange(out.shape[1]):
+        for n in numba.prange(out.shape[0]):
+            out[n, ch] = x[n, ch] * convs[ch]

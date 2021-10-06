@@ -60,10 +60,10 @@ class Card:
     def __exit__(self, *a):
         self.close()
         
-    def ch_init(self, 
-                ch_nums: Sequence = (1,), 
-                terminations: Sequence = ("1M",), 
-                fullranges=(10,)) -> None:
+    def set_channels(self, 
+                     ch_nums: Sequence = (1,), 
+                     terminations: Sequence = ("1M",), 
+                     fullranges=(10,)) -> None:
         """ Initialize channels.
         ch_nums is a list of channel numbers to initialize
         terminations is a list of terminations to use with these channels
@@ -82,16 +82,16 @@ class Card:
             chan_mask |= getattr(sp, "CHANNEL%i" % ch_n)
             
         self.set32(sp.SPC_CHENABLE, chan_mask)
+
+        self._maxadc = self.get32(sp.SPC_MIINST_MAXADCVALUE)
         
         for ch_n, term, fullrng in zip(ch_nums, terminations, fullranges):
             ch_n = int(ch_n)
             fullrng = int(fullrng * 1000)
             
             if fullrng in [200, 500, 1000, 2000, 5000, 10000]:
-                range_param = getattr(sp, "SPC_AMP{0:d}".format(int(ch_n)))
+                range_param = getattr(sp, "SPC_AMP%i" % ch_n)
                 self.set32(range_param, fullrng); 
-                
-                self._maxadc = self.get32(sp.SPC_MIINST_MAXADCVALUE)
                 
                 conversion = float(fullrng) / 1000 / self._maxadc
                 self._conversions[ch_n] = conversion
@@ -105,7 +105,7 @@ class Card:
             else:
                 raise ValueError("The specified termination is invalid")
                 
-            term_param = getattr(sp, "SPC_50OHM{0:d}".format(int(ch_n)))
+            term_param = getattr(sp, "SPC_50OHM%i" % ch_n)
             self.set32(term_param, term_val)
          
     def set_acquisition(self, 
@@ -128,9 +128,19 @@ class Card:
             Termination is equal to 1 for 50 Ohm and 0 for 1 MOhm
         """  
         
+        # TODO: move the code between this place and set_channels to set_channels
         if len(channels) not in [1, 2, 4]:
             raise ValueError("The number of activated channels can be 1, 2 or 4 only") # TODO: This is an inconsistency, becayse the trigger assumes that there can be more than 4 channels.
-            
+        
+        # Sort all the arrays
+        sort_idx = np.argsort(channels)
+        self._acq_channels = np.array(channels)[sort_idx]
+        terminations = np.array(terminations)[sort_idx]
+        fullranges = np.array(fullranges)[sort_idx]
+
+        # Choose channel
+        self.set_channels(self._acq_channels, terminations, fullranges)
+
         timeout *= 1e3  # Converts to ms
         self.Ns = int(Ns)
         if self.Ns % 4 != 0:
@@ -138,21 +148,11 @@ class Card:
 
         self.samplerate = int(samplerate)
         
-        # Sort all the arrays
-        sort_idx = np.argsort(channels)
-        self._acq_channels = np.array(channels)[sort_idx]
-        terminations = np.array(terminations)[sort_idx]
-        fullranges = np.array(fullranges)[sort_idx]
-        
         if Ns / samplerate >= timeout:
             raise ValueError("Timeout is shorter than acquisition time")
-        
-        # Settings for the DMA buffer
-        # Buffer size in bytes. Enough memory samples with 2 bytes each
-        self._qwBufferSize = sp.uint64(self.Ns * 2 * len(self._acq_channels)); 
-        
-        # Driver should notify program after all data has been transfered
-        self._lNotifySize = sp.int32(0); 
+
+        # Set the sampling rate
+        self.set64(sp.SPC_SAMPLERATE, self.samplerate)
 
         # Set number of samples per channel
         self.set32(sp.SPC_MEMSIZE, self.Ns)
@@ -162,16 +162,10 @@ class Card:
         self.set32(sp.SPC_POSTTRIGGER, self.Ns - int(pretrig))
         
         # Single trigger, standard mode
-        self.set32(sp.SPC_CARDMODE, sp.SPC_REC_STD_SINGLE)
+        self.set_card_mode("std", "single")
         
         # Set timeout value
         self.set32(sp.SPC_TIMEOUT, int(timeout))
-        
-        # Set the sampling rate
-        self.set64(sp.SPC_SAMPLERATE, self.samplerate)
-
-        # Choose channel
-        self.ch_init(self._acq_channels, terminations, fullranges)
 
         # define the data buffer
         # we try to use continuous memory if available and big enough
@@ -181,16 +175,45 @@ class Card:
                                  sp.SPCM_BUF_DATA, 
                                  sp.byref(self._pvBuffer), 
                                  sp.byref(self._qwContBufLen))
+
+        # Settings for the DMA buffer
+        # Buffer size in bytes. Enough memory samples with 2 bytes each
+        self._qwBufferSize = sp.uint64(self.Ns * 2 * len(self._acq_channels))
         
         if self._qwContBufLen.value >= self._qwBufferSize.value:
             sys.stdout.write("Using continuous buffer\n")
         else:
-            self._pvBuffer = sp.create_string_buffer(self._qwBufferSize.value)
+            self._pvBuffer = sp.create_string_buffer(self._qwBufferSize.value) 
+
+        # Driver should notify program after all data has been transfered
+        self._lNotifySize = sp.int32(0); 
 
         sp.spcm_dwDefTransfer_i64(self._hCard, sp.SPCM_BUF_DATA, 
                                    sp.SPCM_DIR_CARDTOPC, self._lNotifySize, 
                                    self._pvBuffer, sp.uint64(0), 
                                    self._qwBufferSize)
+
+    def set_card_mode(self, mode: str, sub: str = "single") -> None:
+        """Sets the card mode. The arguments are case-insensitive.
+
+        Args:
+            mode ('std' or 'fifo'): Main mode.
+            sub ('single', 'multi', 'gate' or 'aba'): Sub-mode.
+        """
+
+        # Checks the consistency of arguments.
+        mode = mode.upper()
+        if mode not in ["STD", "FIFO"]:
+            raise ValueError(f"The mode must be 'std' or 'fifo', not {mode}.")
+        
+        sub = sub.upper()
+        if sub not in ["SINGLE", "MULTI", "GATE", "ABA"]:
+            raise ValueError(f"The sub-mode must be 'single', 'multi', 'gate' "
+                             f"or 'aba', not {sub}.")
+        
+        # Sets the card mode.
+        mode_val = getattr(sp, "SPC_REC_%s_%s" % (mode, sub))
+        self.set32(sp.SPC_CARDMODE, mode_val)
 
     def set_trigger(self, mode: str = "soft", channel: int = 0, edge: str = "pos", level: float = 0) -> None:
         """

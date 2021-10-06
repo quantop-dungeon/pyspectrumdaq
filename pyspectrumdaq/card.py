@@ -107,8 +107,7 @@ class Card(object):
             term_param = getattr(sp, "SPC_50OHM{0:d}".format(int(ch_n)))
             self._set32(term_param, term_val)
          
-    def acquisition_set(self, channels=[1], Ns=300e3, samplerate=30e6, 
-                        clockmode = "int",
+    def set_acquisition(self, channels=[1], Ns=300e3, samplerate=30e6,
                         timeout=10, fullranges=[10], 
                         terminations=["1M"], pretrig_ratio=0):
         """
@@ -123,12 +122,13 @@ class Card(object):
         """  
         
         if len(channels) not in [1, 2, 4]:
-            raise ValueError("Number of activated channels should be 1, 2 or 4 only")
+            raise ValueError("The number of activated channels can be 1, 2 or 4 only") # TODO: This is an inconsistency, becayse the trigger assumes that there can be more than 4 channels.
             
-        timeout *= 1e3 # Convert to ms
+        timeout *= 1e3  # Converts to ms
         self.Ns = int(Ns)
         if self.Ns % 4 != 0:
-            raise ValueError("Number of samples should be divisible by 4")
+            raise ValueError("The number of samples should be divisible by 4")
+
         self.samplerate = int(samplerate)
         
         # Sort all the arrays
@@ -160,14 +160,6 @@ class Card(object):
         # Set timeout value
         self._set32(sp.SPC_TIMEOUT, int(timeout))
         
-        if clockmode == "int":
-             # clock mode internal PLL
-            sp.spcm_dwSetParam_i32 (self._hCard, sp.SPC_CLOCKMODE, sp.SPC_CM_INTPLL) 
-        else:
-            # Set external reference lock with 10 MHz frequency
-            self._set32(sp.SPC_CLOCKMODE, sp.SPC_CM_EXTREFCLOCK)
-            self._set32(sp.SPC_REFERENCECLOCK, 10000000)
-        
         # Set the sampling rate
         self._set64(sp.SPC_SAMPLERATE, self.samplerate)
 
@@ -178,11 +170,11 @@ class Card(object):
         # we try to use continuous memory if available and big enough
         self._pvBuffer = sp.c_void_p()
         self._qwContBufLen = sp.uint64(0)
-        sp.spcm_dwGetContBuf_i64 (self._hCard, 
-                                  sp.SPCM_BUF_DATA, 
-                                  sp.byref(self._pvBuffer), 
-                                  sp.byref(self._qwContBufLen))
-        #sys.stdout.write ("ContBuf length: {0:d}\n".format(self._qwContBufLen.value))
+        sp.spcm_dwGetContBuf_i64(self._hCard, 
+                                 sp.SPCM_BUF_DATA, 
+                                 sp.byref(self._pvBuffer), 
+                                 sp.byref(self._qwContBufLen))
+        
         if self._qwContBufLen.value >= self._qwBufferSize.value:
             sys.stdout.write("Using continuous buffer\n")
         else:
@@ -193,28 +185,34 @@ class Card(object):
                                    self._pvBuffer, sp.uint64(0), 
                                    self._qwBufferSize)
 
-    def trigger_set(self, mode="soft", channel=0, edge="pos", level=0):
+    def set_trigger(self, mode="soft", channel=0, edge="pos", level=0):
         """
         Set triggering mode. Can be either "software", i.e. immediate free-run,
         or on a rising or falling edge of one of the channels
+
+        Args:
+            mode {soft, ext or chan}
+            edge {pos or neg}:
+                Trigger edge. Applies to channel and external trigger modes.
+            level: trigger level in volts. Only applies to channel triggers.
         """
         if mode == "soft":
             # Software trigger
     
             self._set32(sp.SPC_TRIG_ORMASK, sp.SPC_TMASK_SOFTWARE)
-            self._set32(sp.SPC_TRIG_ANDMASK, 0)
+            # self._set32(sp.SPC_TRIG_ANDMASK, 0)  This is not a valid value to set, and it does not do anything, right?
         elif mode == "ext":
             # External trigger
 
             # Disables all triggering.
             self._set32(sp.SPC_TRIG_ORMASK, 0)
-            self._set32(sp.SPC_TRIG_ANDMASK, 0)
+            self._set32(sp.SPC_TRIG_CH_ORMASK0, 0)
             self._set32(sp.SPC_TRIG_CH_ORMASK1, 0)
+            self._set32(sp.SPC_TRIG_CH_ANDMASK0, 0)
             self._set32(sp.SPC_TRIG_CH_ANDMASK1, 0)
 
             # Enables the external trigger.
-            mask = getattr(sp, "SPC_TMASK_EXT%i" % channel)
-            self._set32(sp.SPC_TRIG_ANDMASK, mask)
+            self._set32(sp.SPC_TRIG_ANDMASK, "SPC_TMASK_EXT%i" % channel)
 
             modereg = getattr(sp, "SPC_TRIG_EXT%i_MODE" % channel)
             if edge == "pos":
@@ -232,15 +230,17 @@ class Card(object):
             if abs(trigvalue) >= self._maxadc/4:
                 raise ValueError("The specified trigger level is outside allowed values")
             
-            # Disable all other triggering
-            self._set32(sp.SPC_TRIG_ORMASK, sp.SPC_TMASK_NONE)
-            self._set32(sp.SPC_TRIG_ANDMASK, 0)
-            self._set32(sp.SPC_TRIG_CH_ORMASK1, 0)
-            self._set32(sp.SPC_TRIG_CH_ANDMASK1, 0)
-            
             # Enable the required trigger
             maskname = "SPC_TMASK0_CH{0:d}".format(int(channel))
             chmask = getattr(sp, maskname)
+
+            # Disable all other triggering
+            self._set32(sp.SPC_TRIG_ORMASK, 0)
+            self._set32(sp.SPC_TRIG_ANDMASK, 0)
+            self._set32(sp.SPC_TRIG_CH_ORMASK1, 0)
+            self._set32(sp.SPC_TRIG_CH_ANDMASK0, 0)
+            self._set32(sp.SPC_TRIG_CH_ANDMASK1, 0)
+
             self._set32(sp.SPC_TRIG_CH_ORMASK0, chmask)
             
             # Mode is set to the required one
@@ -258,6 +258,18 @@ class Card(object):
             levelreg = getattr(sp, levelreg_name)
             self._set32(levelreg, trigvalue)
 
+    def set_clock(self, mode="int", ext_freq=10000000):
+        """Sets the clock. The mode can be internal or external, for 
+        the external mode the external cklock frequency must be specified."""
+
+        if mode == "int":
+             # Internal clock.
+            self._set32(sp.SPC_CLOCKMODE, sp.SPC_CM_INTPLL) 
+        else:
+            # External reference clock.
+            self._set32(sp.SPC_CLOCKMODE, sp.SPC_CM_EXTREFCLOCK)
+            self._set32(sp.SPC_REFERENCECLOCK, int(ext_freq))
+
     def acquire(self, convert=True):
         """Acquire time trace without time axis"""
 
@@ -274,12 +286,10 @@ class Card(object):
         dwError = self._set32(sp.SPC_M2CMD, start_cmd)
         
         # check for error
-        szErrorTextBuffer = sp.create_string_buffer(sp.ERRORTEXTLEN)
         if dwError != sp.ERR_OK:
-            sp.spcm_dwGetErrorInfo_i32 (self._hCard, None, None, 
-                                        szErrorTextBuffer)
-            print("{0}\n".format(szErrorTextBuffer.value))
-            self.close()
+            szErrorTextBuff = sp.create_string_buffer(sp.ERRORTEXTLEN)
+            sp.spcm_dwGetErrorInfo_i32(self._hCard, None, None, szErrorTextBuff)
+            print("Error code: {0}\n".format(szErrorTextBuff.value))
             return
 
         # Wait until acquisition has finished, then return data
@@ -303,7 +313,6 @@ class Card(object):
             out = np.zeros((self.Ns, Nch), dtype=np.float64)
             _convert(out, data, conv_out)
             return out
-
 
     def _get32(self, reg):
         """Gets the value of a 32-bit register. 

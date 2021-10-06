@@ -1,1 +1,1 @@
-from pyspcm import *
+from .pyspcm import *

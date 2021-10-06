@@ -1,23 +1,20 @@
-# -*- coding: utf-8 -*-
-from __future__ import print_function
-from __future__ import division
-
 import sys
+from typing import Sequence
 import numpy as np
 import numba
 
-# imports spectrum driver functions
+# Imports vendor-supplied driver functions
 import pyspcm as sp
 
 
-class Card(object):
+class Card:
     """A class for communication with a Spectrum Instrumentation M-series data 
-    acquisition card."""
+    acquisition cards."""
     
-    def __init__(self, address="/dev/spcm0"):
-        """Connects to a DAQ card"""
+    def __init__(self, address: str = "/dev/spcm0"):
+        """Connects to a DAQ card."""
 
-        # Opens card
+        # Opens the card.
         self._hCard = sp.spcm_hOpen(address)
         if self._hCard == None:
             msg = ("The card could not be open. Try closing other software "
@@ -25,18 +22,20 @@ class Card(object):
             raise CardInaccessibleError(msg)
 
         # Reads the type, function and serial number of the card.
-        lCardType = self._get32(sp.SPC_PCITYP)
-        lSerialNumber = self._get32(sp.SPC_PCISERIALNO)
-        lFncType = self._get32(sp.SPC_FNCTYPE)
+        card_type = self.get32(sp.SPC_PCITYP)
+        serial_number = self.get32(sp.SPC_PCISERIALNO)
+        func_type = self.get32(sp.SPC_FNCTYPE)
 
-        sCardName = szTypeToName(lCardType.value)
-        print("Found: {0} sn {1:05d}".format(sCardName, lSerialNumber.value))
+        # Translates the type to a readable name.
+        card_name = szTypeToName(card_type) 
 
-        # Checks if the card's type is analog input (AI).
-        if lFncType.value != sp.SPCM_TYPE_AI:
+        print(f"Found: {card_name} sn {serial_number}")
+
+        # Checks that the card's type is analog input (AI).
+        if func_type != sp.SPCM_TYPE_AI:
             self.close()
-            msg = ("The card type (%i) is not AI (%i)." % (lFncType.value, 
-                                                           sp.SPCM_TYPE_AI))
+            msg = ("The card function type (%i) is not AI (%i)." 
+                   % (func_type, sp.SPCM_TYPE_AI))
             raise CardIncompatibleError(msg)
 
         # Resets the card to prevent undefined behaviour.
@@ -46,13 +45,13 @@ class Card(object):
         # values and voltages (for all enabled channels)
         self._conversions = np.zeros(4)
 
-    def close(self):
+    def close(self) -> None:
         """Closes the connection to the DAQ card."""
         sp.spcm_vClose(self._hCard)
 
-    def reset(self):
+    def reset(self) -> None:
         """Resets the card to default settings."""
-        sp.spcm_dwSetParam_i32(self._hCard, sp.SPC_M2CMD, sp.M2CMD_CARD_RESET)
+        self.set32(sp.SPC_M2CMD, sp.M2CMD_CARD_RESET)
         
     def __enter__(self):
         self.reset()
@@ -61,7 +60,10 @@ class Card(object):
     def __exit__(self, *a):
         self.close()
         
-    def ch_init(self, ch_nums=[1], terminations=["1M"], fullranges=[10]):
+    def ch_init(self, 
+                ch_nums: Sequence = (1,), 
+                terminations: Sequence = ("1M",), 
+                fullranges=(10,)) -> None:
         """ Initialize channels.
         ch_nums is a list of channel numbers to initialize
         terminations is a list of terminations to use with these channels
@@ -79,7 +81,7 @@ class Card(object):
         for ch_n in ch_nums:
             chan_mask |= getattr(sp, "CHANNEL%i" % ch_n)
             
-        self._set32(sp.SPC_CHENABLE, chan_mask)
+        self.set32(sp.SPC_CHENABLE, chan_mask)
         
         for ch_n, term, fullrng in zip(ch_nums, terminations, fullranges):
             ch_n = int(ch_n)
@@ -87,10 +89,9 @@ class Card(object):
             
             if fullrng in [200, 500, 1000, 2000, 5000, 10000]:
                 range_param = getattr(sp, "SPC_AMP{0:d}".format(int(ch_n)))
-                self._set32(range_param, fullrng); 
+                self.set32(range_param, fullrng); 
                 
-                maxadc = self._get32(sp.SPC_MIINST_MAXADCVALUE)
-                self._maxadc = maxadc.value
+                self._maxadc = self.get32(sp.SPC_MIINST_MAXADCVALUE)
                 
                 conversion = float(fullrng) / 1000 / self._maxadc
                 self._conversions[ch_n] = conversion
@@ -105,20 +106,26 @@ class Card(object):
                 raise ValueError("The specified termination is invalid")
                 
             term_param = getattr(sp, "SPC_50OHM{0:d}".format(int(ch_n)))
-            self._set32(term_param, term_val)
+            self.set32(term_param, term_val)
          
-    def set_acquisition(self, channels=[1], Ns=300e3, samplerate=30e6,
-                        timeout=10, fullranges=[10], 
-                        terminations=["1M"], pretrig_ratio=0):
+    def set_acquisition(self, 
+                        channels: Sequence = (1,), 
+                        fullranges: Sequence = (10,), 
+                        terminations: Sequence = ("1M",),
+                        Ns: int = 300e3, 
+                        samplerate: int = 30e6,
+                        timeout: int = 10,  
+                        pretrig_ratio: float =0) -> None:
         """
         Initializes acquisition settings
 
-        Specify number of samples (per channel).
-        Samplerate in Hz.
-        Timeout in ms.
-        Specify channel number as e.g. 0, 1, 2 or 3.
-        Fullrange is in V has to be equal to one of {0.2, 0.5, 1, 2, 5, 10}.
-        Termination is equal to 1 for 50 Ohm and 0 for 1 MOhm
+        Args:
+            Specify number of samples (per channel).
+            Samplerate in Hz.
+            Timeout in ms.
+            Specify channel number as e.g. 0, 1, 2 or 3.
+            Fullrange is in V has to be equal to one of {0.2, 0.5, 1, 2, 5, 10}.
+            Termination is equal to 1 for 50 Ohm and 0 for 1 MOhm
         """  
         
         if len(channels) not in [1, 2, 4]:
@@ -148,20 +155,20 @@ class Card(object):
         self._lNotifySize = sp.int32(0); 
 
         # Set number of samples per channel
-        self._set32(sp.SPC_MEMSIZE, self.Ns)
+        self.set32(sp.SPC_MEMSIZE, self.Ns)
         
         # Setting the posttrigger value which has to be a multiple of 4
         pretrig = np.clip(((self.Ns * pretrig_ratio) // 4) * 4, 4, self.Ns - 4)
-        self._set32(sp.SPC_POSTTRIGGER, self.Ns - int(pretrig))
+        self.set32(sp.SPC_POSTTRIGGER, self.Ns - int(pretrig))
         
         # Single trigger, standard mode
-        self._set32(sp.SPC_CARDMODE, sp.SPC_REC_STD_SINGLE)
+        self.set32(sp.SPC_CARDMODE, sp.SPC_REC_STD_SINGLE)
         
         # Set timeout value
-        self._set32(sp.SPC_TIMEOUT, int(timeout))
+        self.set32(sp.SPC_TIMEOUT, int(timeout))
         
         # Set the sampling rate
-        self._set64(sp.SPC_SAMPLERATE, self.samplerate)
+        self.set64(sp.SPC_SAMPLERATE, self.samplerate)
 
         # Choose channel
         self.ch_init(self._acq_channels, terminations, fullranges)
@@ -185,7 +192,7 @@ class Card(object):
                                    self._pvBuffer, sp.uint64(0), 
                                    self._qwBufferSize)
 
-    def set_trigger(self, mode="soft", channel=0, edge="pos", level=0):
+    def set_trigger(self, mode: str = "soft", channel: int = 0, edge: str = "pos", level: float = 0) -> None:
         """
         Set triggering mode. Can be either "software", i.e. immediate free-run,
         or on a rising or falling edge of one of the channels
@@ -199,26 +206,26 @@ class Card(object):
         if mode == "soft":
             # Software trigger
     
-            self._set32(sp.SPC_TRIG_ORMASK, sp.SPC_TMASK_SOFTWARE)
+            self.set32(sp.SPC_TRIG_ORMASK, sp.SPC_TMASK_SOFTWARE)
             # self._set32(sp.SPC_TRIG_ANDMASK, 0)  This is not a valid value to set, and it does not do anything, right?
         elif mode == "ext":
             # External trigger
 
             # Disables all triggering.
-            self._set32(sp.SPC_TRIG_ORMASK, 0)
-            self._set32(sp.SPC_TRIG_CH_ORMASK0, 0)
-            self._set32(sp.SPC_TRIG_CH_ORMASK1, 0)
-            self._set32(sp.SPC_TRIG_CH_ANDMASK0, 0)
-            self._set32(sp.SPC_TRIG_CH_ANDMASK1, 0)
+            self.set32(sp.SPC_TRIG_ORMASK, 0)
+            self.set32(sp.SPC_TRIG_CH_ORMASK0, 0)
+            self.set32(sp.SPC_TRIG_CH_ORMASK1, 0)
+            self.set32(sp.SPC_TRIG_CH_ANDMASK0, 0)
+            self.set32(sp.SPC_TRIG_CH_ANDMASK1, 0)
 
             # Enables the external trigger.
-            self._set32(sp.SPC_TRIG_ANDMASK, "SPC_TMASK_EXT%i" % channel)
+            self.set32(sp.SPC_TRIG_ANDMASK, "SPC_TMASK_EXT%i" % channel)
 
             modereg = getattr(sp, "SPC_TRIG_EXT%i_MODE" % channel)
             if edge == "pos":
-                self._set32(modereg, sp.SPC_TM_POS)
+                self.set32(modereg, sp.SPC_TM_POS)
             elif edge == "neg":
-                self._set32(modereg, sp.SPC_TM_NEG)
+                self.set32(modereg, sp.SPC_TM_NEG)
         elif mode == "chan":
             # Channel level trigger
 
@@ -235,58 +242,58 @@ class Card(object):
             chmask = getattr(sp, maskname)
 
             # Disable all other triggering
-            self._set32(sp.SPC_TRIG_ORMASK, 0)
-            self._set32(sp.SPC_TRIG_ANDMASK, 0)
-            self._set32(sp.SPC_TRIG_CH_ORMASK1, 0)
-            self._set32(sp.SPC_TRIG_CH_ANDMASK0, 0)
-            self._set32(sp.SPC_TRIG_CH_ANDMASK1, 0)
+            self.set32(sp.SPC_TRIG_ORMASK, 0)
+            self.set32(sp.SPC_TRIG_ANDMASK, 0)
+            self.set32(sp.SPC_TRIG_CH_ORMASK1, 0)
+            self.set32(sp.SPC_TRIG_CH_ANDMASK0, 0)
+            self.set32(sp.SPC_TRIG_CH_ANDMASK1, 0)
 
-            self._set32(sp.SPC_TRIG_CH_ORMASK0, chmask)
+            self.set32(sp.SPC_TRIG_CH_ORMASK0, chmask)
             
             # Mode is set to the required one
             modereg_name = "SPC_TRIG_CH{0:d}_MODE".format(int(channel))
             modereg = getattr(sp, modereg_name)
             if edge == "pos":
-                self._set32(modereg, sp.SPC_TM_POS)
+                self.set32(modereg, sp.SPC_TM_POS)
             elif edge == "neg":
-                self._set32(modereg, sp.SPC_TM_NEG)
+                self.set32(modereg, sp.SPC_TM_NEG)
             else:
                 raise ValueError("Incorrect edge specification")
                 
             # Finally, set the trigger level
             levelreg_name = "SPC_TRIG_CH{0:d}_LEVEL0".format(int(channel))
             levelreg = getattr(sp, levelreg_name)
-            self._set32(levelreg, trigvalue)
+            self.set32(levelreg, trigvalue)
 
-    def set_clock(self, mode="int", ext_freq=10000000):
+    def set_clock(self, mode: str = "int", ext_freq: int = 10000000) -> None:
         """Sets the clock. The mode can be internal or external, for 
         the external mode the external cklock frequency must be specified."""
 
         if mode == "int":
              # Internal clock.
-            self._set32(sp.SPC_CLOCKMODE, sp.SPC_CM_INTPLL) 
+            self.set32(sp.SPC_CLOCKMODE, sp.SPC_CM_INTPLL) 
         else:
             # External reference clock.
-            self._set32(sp.SPC_CLOCKMODE, sp.SPC_CM_EXTREFCLOCK)
-            self._set32(sp.SPC_REFERENCECLOCK, int(ext_freq))
+            self.set32(sp.SPC_CLOCKMODE, sp.SPC_CM_EXTREFCLOCK)
+            self.set32(sp.SPC_REFERENCECLOCK, int(ext_freq))
 
-    def acquire(self, convert=True):
+    def acquire(self, convert: bool = True):
         """Acquire time trace without time axis"""
 
         # Setup memory transfer parameters
-        sp.spcm_dwDefTransfer_i64 (self._hCard, sp.SPCM_BUF_DATA, 
-                                   sp.SPCM_DIR_CARDTOPC, 
-                                   self._lNotifySize, self._pvBuffer, 
-                                   sp.uint64(0), self._qwBufferSize)
+        sp.spcm_dwDefTransfer_i64(self._hCard, sp.SPCM_BUF_DATA, 
+                                 sp.SPCM_DIR_CARDTOPC, 
+                                  self._lNotifySize, self._pvBuffer, 
+                                  sp.uint64(0), self._qwBufferSize)
         
         # Start card, enable trigger and wait until the acquisition has finished
         start_cmd = (sp.M2CMD_CARD_START | sp.M2CMD_CARD_ENABLETRIGGER
                      | sp.M2CMD_CARD_WAITREADY | sp.M2CMD_DATA_STARTDMA
                      | sp.M2CMD_DATA_WAITDMA)
-        dwError = self._set32(sp.SPC_M2CMD, start_cmd)
+        err = self.set32(sp.SPC_M2CMD, start_cmd)
         
         # check for error
-        if dwError != sp.ERR_OK:
+        if err != sp.ERR_OK:
             szErrorTextBuff = sp.create_string_buffer(sp.ERRORTEXTLEN)
             sp.spcm_dwGetErrorInfo_i32(self._hCard, None, None, szErrorTextBuff)
             print("Error code: {0}\n".format(szErrorTextBuff.value))
@@ -314,33 +321,39 @@ class Card(object):
             _convert(out, data, conv_out)
             return out
 
-    def _get32(self, reg):
+    def get32(self, reg: int) -> int:
         """Gets the value of a 32-bit register. 
-        An alias for spcm_dwGetParam_i32."""
+        An alias for spcm_dwGetParam_i32.
+        """
         dst = sp.int32(0)
         sp.spcm_dwGetParam_i32(self._hCard, reg, sp.byref(dst))
-        return dst
+        return dst.value
 
-    def _get64(self, reg):
+    def get64(self, reg: int) -> int:
         """Gets the value of a 64-bit register. 
-        An alias for spcm_dwGetParam_i64."""
+        An alias for spcm_dwGetParam_i64.
+        """
         dst = sp.int64(0)
         sp.spcm_dwGetParam_i64(self._hCard, reg, sp.byref(dst))
-        return dst
+        return dst.value
     
-    def _set32(self, reg, val):
-        """Sets the value of a 32-bit register. 
-        An alias for spcm_dwSetParam_i32."""
-        return sp.spcm_dwSetParam_i32(self._hCard, reg, sp.int32(val))
+    def set32(self, reg: int, val: int) -> int:
+        """Sets the value of a 32-bit register. Returns an error code if 
+        an error occurred. An alias for spcm_dwSetParam_i32.
+        """
+        err = sp.spcm_dwSetParam_i32(self._hCard, reg, val)
+        return err.value
     
-    def _set64(self, reg, val):
-        """Sets the value of a 64-bit register. 
-        An alias for spcm_dwSetParam_i64."""    
-        return sp.spcm_dwSetParam_i64(self._hCard, reg, sp.int64(val))
+    def set64(self, reg: int, val: int) -> int:
+        """Sets the value of a 64-bit register. Returns an error code if 
+        an error occurred. An alias for spcm_dwSetParam_i64.
+        """   
+        err = sp.spcm_dwSetParam_i64(self._hCard, reg, val) 
+        return err.value
 
 
 class CardError(Exception):
-    """ Base class for card errors """
+    """Base class for card errors"""
     
 class CardInaccessibleError(CardError):
     pass
@@ -348,7 +361,7 @@ class CardInaccessibleError(CardError):
 class CardIncompatibleError(CardError):
     pass
 
-def szTypeToName(lCardType):
+def szTypeToName(lCardType: int) -> str:
     """A vendor-supplied function for card name translation."""
 
     lVersion = (lCardType & sp.TYP_VERSIONMASK)

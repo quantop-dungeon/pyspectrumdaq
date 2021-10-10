@@ -143,7 +143,10 @@ class Card:
         return self
 
     def __exit__(self, *a):
+        """Closes the card connection and frees the memory buffer."""
         self.close()
+        del self._pvBuffer
+        del self._buffer
 
     def set_acquisition(self,
                         mode: str = "std_single",
@@ -606,15 +609,19 @@ class Card:
                                   sp.SPCM_DIR_CARDTOPC, trace_bsize,
                                   self._pvBuffer, 0, buff_size)
 
-        # For the convenience of access, we also represent the created data
-        # buffer as a 2D numpy array of 16bit integers.
+        # For the convenience of access, we also represent the created buffer 
+        # as a 2D numpy array of 16bit integers.
+        arr = np.frombuffer(self._pvBuffer, dtype=np.int16)
+        self._buffer = np.reshape(arr, (nbufftraces * nsamples, nchannels))
 
-        # Casts the data pointer to pointer to 16bit integers.
-        pnData = cast(self._pvBuffer, sp.ptr16)
-
-        # Casts as a numpy array.
-        dim = (nbufftraces * nsamples, nchannels)
-        self._buffer = np.ctypeslib.as_array(pnData, shape=dim)
+        # The code below also works for the conversion but causes a memory leak
+        # After del self._buffer and del self._pvBuffer, the memory they 
+        # point to is not freed. Apparently, cast function is the culprit, see 
+        # https://stackoverflow.com/questions/61479041/ctypes-does-not-free-string-buffers
+        #
+        # pnData = cast(self._pvBuffer, sp.ptr16)
+        # dim = (nbufftraces * nsamples, nchannels)
+        # self._buffer = np.ctypeslib.as_array(pnData, shape=dim)
 
 
 class CardError(Exception):

@@ -1,7 +1,6 @@
 from typing import Generator, Sequence, Union
 
 from ctypes import byref
-from ctypes import cast
 from ctypes import c_void_p
 
 import numpy as np
@@ -9,7 +8,7 @@ import numba
 
 # Imports vendor-supplied driver functions
 # ctype variables are named camelCase following the conventions of pyspcm.
-import pyspcm as sp
+from . import pyspcm as sp
 
 
 class Card:
@@ -614,10 +613,10 @@ class Card:
         arr = np.frombuffer(self._pvBuffer, dtype=np.int16)
         self._buffer = np.reshape(arr, (nbufftraces * nsamples, nchannels))
 
-        # The code below also works for the conversion but causes a memory leak
+        # The code below also works for the conversion but causes a memory leak.
         # After del self._buffer and del self._pvBuffer, the memory they 
-        # point to is not freed. Apparently, cast function is the culprit, see 
-        # https://stackoverflow.com/questions/61479041/ctypes-does-not-free-string-buffers
+        # point to is not freed. Apparently, ctypes.cast function is 
+        # the culprit, see https://stackoverflow.com/questions/61479041/ctypes-does-not-free-string-buffers
         #
         # pnData = cast(self._pvBuffer, sp.ptr16)
         # dim = (nbufftraces * nsamples, nchannels)

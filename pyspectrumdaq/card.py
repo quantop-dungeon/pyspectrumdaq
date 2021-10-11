@@ -32,7 +32,7 @@ class Card:
         # Translates the type to a readable name.
         card_name = szTypeToName(card_type)
 
-        print(f"Found: {card_name} sn {serial_number}")
+        print(f"Card {card_name} SN {serial_number}.")
 
         # Checks that the card's type is analog input (AI).
         if func_type != sp.SPCM_TYPE_AI:
@@ -81,9 +81,9 @@ class Card:
         Raises an exception if the spcm function returns a non-zero error code. 
         """
         dst = sp.int32(0)
-        dwError = sp.spcm_dwGetParam_i32(self._hCard, reg, byref(dst))
+        err = sp.spcm_dwGetParam_i32(self._hCard, reg, byref(dst))
 
-        if dwError.value != sp.ERR_OK:
+        if err != sp.ERR_OK:
             raise RegisterAccessError(self.get_error_info())
 
         return dst.value
@@ -93,9 +93,9 @@ class Card:
         Raises an exception if the spcm function returns a non-zero error code. 
         """
         dst = sp.int64(0)
-        dwError = sp.spcm_dwGetParam_i64(self._hCard, reg, byref(dst))
+        err = sp.spcm_dwGetParam_i64(self._hCard, reg, byref(dst))
 
-        if dwError.value != sp.ERR_OK:
+        if err != sp.ERR_OK:
             raise RegisterAccessError(self.get_error_info())
 
         return dst.value
@@ -104,18 +104,18 @@ class Card:
         """Sets the value of a 32-bit register using spcm_dwSetParam_i32.
         Raises an exception if the spcm function returns a non-zero error code. 
         """
-        dwError = sp.spcm_dwSetParam_i32(self._hCard, reg, val)
+        err = sp.spcm_dwSetParam_i32(self._hCard, reg, val)
 
-        if dwError.value != sp.ERR_OK:
+        if err != sp.ERR_OK:
             raise RegisterAccessError(self.get_error_info())
 
     def set64(self, reg: int, val: int):
         """Sets the value of a 64-bit register using spcm_dwSetParam_i64.
         Raises an exception if the spcm function returns a non-zero error code. 
         """
-        dwError = sp.spcm_dwSetParam_i64(self._hCard, reg, val)
+        err = sp.spcm_dwSetParam_i64(self._hCard, reg, val)
 
-        if dwError.value != sp.ERR_OK:
+        if err != sp.ERR_OK:
             raise RegisterAccessError(self.get_error_info())
 
     def get_error_info(self) -> str:
@@ -189,7 +189,7 @@ class Card:
                 Timeout in s.
         """
 
-        if ntraces.lower() == "inf":
+        if ntraces == "inf":
             ntraces = 0
         else:
             ntraces = int(ntraces)
@@ -361,7 +361,7 @@ class Card:
 
         if convert:
             # Converts the data to voltage readings.
-            cfs = [self._conversions[n] for n in self._acq_channels]
+            cfs = tuple(self._conversions[n] for n in self._acq_channels)
             dim = (self._nsamples, len(self._acq_channels))
             data = np.zeros(dim, dtype=np.float64)
             _convert(data, self._buffer, cfs)
@@ -393,44 +393,37 @@ class Card:
         # Shorthand notations.
         ns = self._nsamples
         nchannels = len(self._acq_channels)
-        cfs = [self._conversions[n] for n in self._acq_channels]
+        cfs = tuple(self._conversions[n] for n in self._acq_channels)
+
+        i = 0  # Initializes the buffer segment counter.
 
         # The command starts the card, enables the trigger, and starts data
-        # transfer and waits for the first chunk of data.
+        # transfer and waits for the first segment of data.
         start_cmd = (sp.M2CMD_CARD_START | sp.M2CMD_CARD_ENABLETRIGGER
                      | sp.M2CMD_DATA_STARTDMA | sp.M2CMD_DATA_WAITDMA)
+        self.set32(sp.SPC_M2CMD, start_cmd)
 
-        dwError = sp.spcm_dwSetParam_i32(self._hCard, sp.SPC_M2CMD, start_cmd)
-        # self.set32 is not used here because we do not want to raise as
-        # an error a notification that FIFO is normally finished.
-
-        cnt = 0  # Initializes the segment counter.
-
-        while dwError.value == sp.ERR_OK:
+        while True:
             if convert:
                 # Converts the data to voltage readings.
                 data = np.zeros((ns, nchannels), dtype=np.float64)
-                _convert(data, self._buffer[cnt * ns: (cnt + 1) * ns, :], cfs)
+                _convert(data, self._buffer[i * ns: (i + 1) * ns, :], cfs)
             else:
                 # Takes a copy because the buffer can be overwritten.
-                data = self._buffer[cnt * ns: (cnt + 1) * ns, :].copy()
+                data = self._buffer[i * ns: (i + 1) * ns, :].copy()
 
             # Notifies that some space in the buffer is free for writing again.
             self.set64(sp.SPC_DATA_AVAIL_CARD_LEN, self._trace_bsize)
 
             yield data
 
-            # Waits for a new chunk of data in the buffer.
-            dwError = sp.spcm_dwSetParam_i32(self._hCard, sp.SPC_M2CMD,
-                                             sp.M2CMD_DATA_WAITDMA)
+            # Waits for a new segment of data in the buffer.
+            self.set32(sp.SPC_M2CMD, sp.M2CMD_DATA_WAITDMA)
 
-            # Increments the offset by one segment.
-            cnt += 1
-            if cnt >= self._nbufftraces:
-                cnt = 0
-        else:
-            print(f"FIFO finished, error code: {self.get_error_info()}.")
-            return
+            # Increments the segment counter in a circular manner.
+            i += 1
+            if i >= self._nbufftraces:
+                i = 0
 
     def set_clock(self, mode: str = "int", ext_freq: int = 10000000) -> None:
         """Sets the clock mode, which can be internal ('int') or 
@@ -565,9 +558,12 @@ class Card:
         # if an external pre-setup has been done as described in the manual.
         self._pvBuffer = c_void_p()
         qwContBufLen = sp.uint64(0)
-        sp.spcm_dwGetContBuf_i64(self._hCard, sp.SPCM_BUF_DATA,
-                                 byref(self._pvBuffer),
-                                 byref(qwContBufLen))
+        err = sp.spcm_dwGetContBuf_i64(self._hCard, sp.SPCM_BUF_DATA,
+                                       byref(self._pvBuffer),
+                                       byref(qwContBufLen))
+
+        if err != sp.ERR_OK:
+            raise CardError(self.get_error_info())
 
         if qwContBufLen.value >= trace_bsize:
             print("Using a continuous buffer.")
@@ -604,18 +600,21 @@ class Card:
 
         # Defines data transfer to the buffer, with a notification for every
         # new transferred trace.
-        sp.spcm_dwDefTransfer_i64(self._hCard, sp.SPCM_BUF_DATA,
-                                  sp.SPCM_DIR_CARDTOPC, trace_bsize,
-                                  self._pvBuffer, 0, buff_size)
+        err = sp.spcm_dwDefTransfer_i64(self._hCard, sp.SPCM_BUF_DATA,
+                                        sp.SPCM_DIR_CARDTOPC, trace_bsize,
+                                        self._pvBuffer, 0, buff_size)
 
-        # For the convenience of access, we also represent the created buffer 
+        if err != sp.ERR_OK:
+            raise CardError(self.get_error_info())
+
+        # For the convenience of access, we also represent the created buffer
         # as a 2D numpy array of 16bit integers.
         arr = np.frombuffer(self._pvBuffer, dtype=np.int16)
         self._buffer = np.reshape(arr, (nbufftraces * nsamples, nchannels))
 
         # The code below also works for the conversion but causes a memory leak.
-        # After del self._buffer and del self._pvBuffer, the memory they 
-        # point to is not freed. Apparently, ctypes.cast function is 
+        # After del self._buffer and del self._pvBuffer, the memory they
+        # point to is not freed. Apparently, ctypes.cast function is
         # the culprit, see https://stackoverflow.com/questions/61479041/ctypes-does-not-free-string-buffers
         #
         # pnData = cast(self._pvBuffer, sp.ptr16)

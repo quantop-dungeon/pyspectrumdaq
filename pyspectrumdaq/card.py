@@ -1,4 +1,4 @@
-from typing import Generator, Sequence, Union
+from typing import Generator, Sequence
 
 from ctypes import byref
 from ctypes import c_void_p
@@ -65,7 +65,6 @@ class Card:
         self._card_mode = None
 
         self._nsamples = 0  # The number of samples per channel per trace.
-        self._ntraces = 0  # The number of traces to acquire in one run.
 
         self._pvBuffer = None  # A handle to a buffer for DMA data transfer.
         self._buffer = None  # A handle to the same buffer cast a numpy array.
@@ -154,7 +153,6 @@ class Card:
                         terminations: Sequence = ("1M",),
                         samplerate: int = 30e6,
                         nsamples: int = 300e3,
-                        ntraces: Union[int, str] = 1,
                         timeout: float = 10,
                         pretrig_ratio: float = 0) -> None:
         """Sets acquisition parameters and initializes an appropriate buffer
@@ -181,18 +179,12 @@ class Card:
                 The sample rate in Hz.
             nsamples:
                 The number of samples per channel per data trace.
-            ntraces:
-                The number of data traces to acquire. Only has an effect in 
-                FIFO modes. If set to 0 or "inf", the acquisition will continue 
-                indefinitely until the user stops it.
             timeout: 
-                Timeout in s.
+                The timeout in s.
+            pretrig_ratio:
+                The fraction of samples in a trace that is recorded prior to 
+                the trigger edge. 
         """
-
-        if ntraces == "inf":
-            ntraces = 0
-        else:
-            ntraces = int(ntraces)
 
         nsamples = int(nsamples)
         samplerate = int(samplerate)
@@ -222,25 +214,26 @@ class Card:
         self.set32(sp.SPC_POSTTRIGGER, nsamples - int(pretrig))
 
         # Sets the timeout value after converting it to milliseconds.
-        self.set32(sp.SPC_TIMEOUT, int(timeout*1e3))
+        self.set32(sp.SPC_TIMEOUT, int(timeout * 1e3))
 
         if mode == "std_single":
 
             # Sets the number of samples per channel to acquire in one run.
             self.set32(sp.SPC_MEMSIZE, nsamples)
 
-            ntraces = 1
+            ntraces = 1  # A parameter for the memory buffer.
 
-        if mode == "fifo_single" or mode == "fifo_multi":
+        elif mode == "fifo_single" or mode == "fifo_multi":
 
             # Sets the number of samples to acquire per channel per trace.
             self.set32(sp.SPC_SEGMENTSIZE, nsamples)
 
-            # Sets the number of traces to acquire.
-            self.set32(sp.SPC_LOOPS, ntraces)
+            # Configures the card for indefinite acquisition.
+            self.set32(sp.SPC_LOOPS, 0)
+
+            ntraces = 0  # A parameter for the memory buffer.
 
         self._nsamples = nsamples
-        self._ntraces = ntraces
 
         # Allocates a buffer and configures the data transfer.
         self._define_transfer(len(channels), nsamples, ntraces)
@@ -593,7 +586,7 @@ class Card:
             buff_size = trace_bsize * nbufftraces
 
             self._pvBuffer = sp.create_string_buffer(buff_size)
-            print("Using a string buffer.")
+            print("Using a regular buffer.")
 
         self._nbufftraces = nbufftraces
         self._trace_bsize = trace_bsize

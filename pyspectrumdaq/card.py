@@ -19,7 +19,7 @@ class Card:
         """Connects to a DAQ card."""
 
         self._hCard = sp.spcm_hOpen(address)
-        if self._hCard == None:
+        if not self._hCard:
             msg = ("The card could not be open. Try closing other software "
                    "that may be using it.")
             raise CardInaccessibleError(msg)
@@ -37,8 +37,7 @@ class Card:
         # Checks that the card's type is analog input (AI).
         if func_type != sp.SPCM_TYPE_AI:
             self.close()
-            msg = ("The card function type (%i) is not AI (%i)."
-                   % (func_type, sp.SPCM_TYPE_AI))
+            msg = f"The card type ({func_type}) is not AI ({sp.SPCM_TYPE_AI})."
             raise CardIncompatibleError(msg)
 
         # Resets the card to prevent undefined behaviour.
@@ -67,11 +66,11 @@ class Card:
         self._nsamples = 0  # The number of samples per channel per trace.
 
         self._pvBuffer = None  # A handle to a buffer for DMA data transfer.
-        self._buffer = None  # A handle to the same buffer cast a numpy array.
+        self._buffer = None    # A handle to the same buffer as a numpy array.
         self._nbufftraces = 0  # The size of the buffer in traces.
-        self._trace_bsize = 0
+        self._trace_bsize = 0  # The size of each trace in bytes.
 
-        # Factors for converting between ADC values and voltages
+        # The factors for converting between ADC values and voltages
         # (for all channels, not the ones that are enabled).
         self._conversions = np.zeros(self._nchannels)
 
@@ -135,7 +134,7 @@ class Card:
 
     def stop(self) -> None:
         """Stops any currently running data acquisition."""
-        self.set32(sp.SPC_M2CMD, sp.M2CMD_CARD_STOP)
+        self.set32(sp.SPC_M2CMD, sp.M2CMD_CARD_STOP | sp.M2CMD_DATA_STOPDMA)
 
     def __enter__(self):
         return self
@@ -236,7 +235,7 @@ class Card:
         self._nsamples = nsamples
 
         # Allocates a buffer and configures the data transfer.
-        self._define_transfer(len(channels), nsamples, ntraces)
+        self._create_buffer(len(channels), nsamples, ntraces)
 
     def set_trigger(self, mode: str = "soft", channel: int = 0,
                     edge: str = "pos", level: float = 0) -> None:
@@ -345,8 +344,16 @@ class Card:
             raise RuntimeError("The card has to be configured for std_single "
                                "mode.")
 
-        # Starts the card, enables trigger, waits until the acquisition has
-        # finished, then return data.
+        # Defines DMA transfer with a notification when all data is received. 
+        # This has to be done for every acquisition.
+        err = sp.spcm_dwDefTransfer_i64(self._hCard, sp.SPCM_BUF_DATA,
+                                        sp.SPCM_DIR_CARDTOPC, 0,
+                                        self._pvBuffer, 0, self._trace_bsize)
+
+        if err != sp.ERR_OK:
+            raise CardError(self.get_error_info())
+
+        # Starts the card and waits until the acquisition has finished.
         start_cmd = (sp.M2CMD_CARD_START | sp.M2CMD_CARD_ENABLETRIGGER
                      | sp.M2CMD_CARD_WAITREADY | sp.M2CMD_DATA_STARTDMA
                      | sp.M2CMD_DATA_WAITDMA)
@@ -383,6 +390,16 @@ class Card:
             raise RuntimeError("The card has to be configured for fifo_single "
                                "or fifo_multi mode.")
 
+        # Defines data transfer with a notification for every new trace.
+        buff_size = self._nbufftraces * self._trace_bsize
+        notify_size = self._trace_bsize
+        err = sp.spcm_dwDefTransfer_i64(self._hCard, sp.SPCM_BUF_DATA,
+                                        sp.SPCM_DIR_CARDTOPC, notify_size,
+                                        self._pvBuffer, 0, buff_size)
+
+        if err != sp.ERR_OK:
+            raise CardError(self.get_error_info())
+
         # Shorthand notations.
         ns = self._nsamples
         nchannels = len(self._acq_channels)
@@ -390,8 +407,8 @@ class Card:
 
         i = 0  # Initializes the buffer segment counter.
 
-        # The command starts the card, enables the trigger, and starts data
-        # transfer and waits for the first segment of data.
+        # Starts the card, enables the trigger, starts data transfer 
+        # and waits for the first segment of data to arrive.
         start_cmd = (sp.M2CMD_CARD_START | sp.M2CMD_CARD_ENABLETRIGGER
                      | sp.M2CMD_DATA_STARTDMA | sp.M2CMD_DATA_WAITDMA)
         self.set32(sp.SPC_M2CMD, start_cmd)
@@ -522,10 +539,9 @@ class Card:
             term_param = getattr(sp, "SPC_50OHM%i" % ch_n)
             self.set32(term_param, term_val)
 
-    def _define_transfer(self, nchannels: int, nsamples: int,
-                         ntraces: int = 1) -> None:
-        """Allocates a buffer and defines data transfer to it (no data is
-        acually transferred by this function). The buffer size is always equal
+    def _create_buffer(self, nchannels: int, nsamples: int, 
+                       ntraces: int) -> None:
+        """Allocates a buffer for data transfer. The buffer size is always equal
         to the size of an integer number of traces, which is smaller or equal 
         to `ntraces`. 
 
@@ -540,12 +556,13 @@ class Card:
                 The number of acquisition channels.
             nsamples:
                 The number of samples per trace per channel.
-            ntrace: 
+            ntraces: 
                 The number of traces to acquire in total. If set to zero, this 
                 corresponds to an infinite number of traces. 
         """
 
-        trace_bsize = 2*nsamples*nchannels  # The size of one trace in bytes.
+        bps = self.get32(sp.SPC_MIINST_BYTESPERSAMPLE)  # Bytes per sample.
+        trace_bsize = bps*nsamples*nchannels  # The size of one trace in bytes.
 
         # Tries getting a continuous buffer. This is only expected to work
         # if an external pre-setup has been done as described in the manual.
@@ -564,7 +581,6 @@ class Card:
             # Rounds the size of the received buffer to an integer
             # number of traces.
             nbufftraces = qwContBufLen.value // trace_bsize
-            buff_size = trace_bsize * nbufftraces
         else:
             # Creates a regular buffer.
 
@@ -583,31 +599,20 @@ class Card:
             else:
                 nbufftraces = ntraces
 
-            buff_size = trace_bsize * nbufftraces
-
-            self._pvBuffer = sp.create_string_buffer(buff_size)
+            self._pvBuffer = sp.create_string_buffer(trace_bsize * nbufftraces)
             print("Using a regular buffer.")
 
         self._nbufftraces = nbufftraces
         self._trace_bsize = trace_bsize
 
-        # Defines data transfer to the buffer, with a notification for every
-        # new transferred trace.
-        err = sp.spcm_dwDefTransfer_i64(self._hCard, sp.SPCM_BUF_DATA,
-                                        sp.SPCM_DIR_CARDTOPC, trace_bsize,
-                                        self._pvBuffer, 0, buff_size)
-
-        if err != sp.ERR_OK:
-            raise CardError(self.get_error_info())
-
-        # For the convenience of access, we also represent the created buffer
-        # as a 2D numpy array of 16bit integers.
+        # For the convenience of access, we also represent the allocated buffer
+        # as a 2D numpy array of 16 bit integers.
         arr = np.frombuffer(self._pvBuffer, dtype=np.int16)
         self._buffer = np.reshape(arr, (nbufftraces * nsamples, nchannels))
 
-        # The code below also works for the conversion but causes a memory leak.
-        # After del self._buffer and del self._pvBuffer, the memory they
-        # point to is not freed. Apparently, ctypes.cast function is
+        # Another way of recasting the buffer is given below. It works, but 
+        # causes memory leak: after del self._buffer and del self._pvBuffer, 
+        # the memory they point to is not freed. Apparently, ctypes.cast is
         # the culprit, see https://stackoverflow.com/questions/61479041/ctypes-does-not-free-string-buffers
         #
         # pnData = cast(self._pvBuffer, sp.ptr16)

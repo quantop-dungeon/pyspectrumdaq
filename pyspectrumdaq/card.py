@@ -105,7 +105,10 @@ class Card:
         err = sp.spcm_dwSetParam_i32(self._hCard, reg, val)
 
         if err != sp.ERR_OK:
-            raise RegisterAccessError(self.get_error_info())
+            if err == sp.ERR_TIMEOUT:
+                raise TimeoutError()
+            else:
+                raise RegisterAccessError(self.get_error_info())
 
     def set64(self, reg: int, val: int):
         """Sets the value of a 64-bit register using spcm_dwSetParam_i64.
@@ -114,7 +117,10 @@ class Card:
         err = sp.spcm_dwSetParam_i64(self._hCard, reg, val)
 
         if err != sp.ERR_OK:
-            raise RegisterAccessError(self.get_error_info())
+            if err == sp.ERR_TIMEOUT:
+                raise TimeoutError()
+            else:
+                raise RegisterAccessError(self.get_error_info())
 
     def get_error_info(self) -> str:
         """Gets information on the last error that occurred.
@@ -286,7 +292,8 @@ class Card:
             self.set32(sp.SPC_TRIG_CH_ANDMASK1, 0)
 
             # Enables the external trigger.
-            self.set32(sp.SPC_TRIG_ANDMASK, "SPC_TMASK_EXT%i" % channel)
+            extmask = getattr(sp, "SPC_TMASK_EXT%i" % channel)
+            self.set32(sp.SPC_TRIG_ANDMASK, extmask)
 
             trigreg = getattr(sp, "SPC_TRIG_EXT%i_MODE" % channel)
             self.set32(trigreg, edgespec)
@@ -503,20 +510,19 @@ class Card:
                 A list of ranges in volts for these channels.
         """
 
-        if len(channels) not in [1, 2, 4, 8]:
+        if len(channels) not in [1, 2, 4, 8, 16]:
             raise ValueError("The number of activated channels has to be 2^n.")
 
-        # Checks that the channel numbers are correct.
-        if not all([(n in range(self._nchannels)) for n in channels]):
+        if not all((n in range(self._nchannels)) for n in channels):
             raise ValueError("Some channel numbers are invalid")
 
-        # Sort all the arrays
+        # Sort all the arrays.
         sort_idx = np.argsort(channels)
         acq_channels = np.array(channels)[sort_idx]
         terminations = np.array(terminations)[sort_idx]
         fullranges = np.array(fullranges)[sort_idx]
 
-        # Enable these channels by creating a CHENABLE mask and applying it
+        # Enables the channels by creating a CHENABLE mask and applying it
         chan_mask = 0
 
         for ch_n in channels:
@@ -646,6 +652,12 @@ class CardIncompatibleError(CardError):
 class RegisterAccessError(CardError):
     """The class for errors that happened during set/get operations performed
     on the card registers."""
+    pass
+
+
+class TimeoutError(CardError):
+    """The error raised when a timeout occurred while waiting for 
+    a driver response."""
     pass
 
 

@@ -7,14 +7,14 @@ with Card() as adc:
     sr = 30 * 10**6
     ns = 409600
 
-    adc.set_acquisition(mode = "fifo_single", 
+    adc.set_acquisition(mode = "fifo_multi", 
                         channels=[1], 
                         terminations=["1M"], 
-                        fullranges=[0.2],
+                        fullranges=[2],
                         pretrig_ratio=0, 
                         nsamples=ns,
                         samplerate=sr)             
-    adc.set_trigger(mode="soft")
+    adc.set_trigger(mode="ext")
 
     ntraces = 40  # The number of traces to acquire.
     dstime = ns * ntraces / adc.samplerate  # The total pure duration of data.

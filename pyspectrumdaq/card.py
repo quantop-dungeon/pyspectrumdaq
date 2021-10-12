@@ -204,13 +204,14 @@ class Card:
         self._set_channels(channels, terminations, fullranges)
         self._set_card_mode(mode)
 
-        # Sets the sampling rate.
+        # Sets the sampling rate and reads it back, because the card can round 
+        # this number without giving an error.
         self.set64(sp.SPC_SAMPLERATE, samplerate)
-        self._samplerate = samplerate
+        self._samplerate = self.get64(sp.SPC_SAMPLERATE)
 
         # Setting the posttrigger value which has to be a multiple of 4.
         pretrig = np.clip(((nsamples*pretrig_ratio) // 4) * 4, 4, nsamples-4)
-        self.set32(sp.SPC_POSTTRIGGER, nsamples - int(pretrig))
+        self.set64(sp.SPC_POSTTRIGGER, nsamples - int(pretrig))
 
         # Sets the timeout value after converting it to milliseconds.
         self.set32(sp.SPC_TIMEOUT, int(timeout * 1e3))
@@ -218,14 +219,14 @@ class Card:
         if mode == "std_single":
 
             # Sets the number of samples per channel to acquire in one run.
-            self.set32(sp.SPC_MEMSIZE, nsamples)
+            self.set64(sp.SPC_MEMSIZE, nsamples)
 
             ntraces = 1  # A parameter for the memory buffer.
 
         elif mode == "fifo_single" or mode == "fifo_multi":
 
             # Sets the number of samples to acquire per channel per trace.
-            self.set32(sp.SPC_SEGMENTSIZE, nsamples)
+            self.set64(sp.SPC_SEGMENTSIZE, nsamples)
 
             # Configures the card for indefinite acquisition.
             self.set32(sp.SPC_LOOPS, 0)
@@ -452,6 +453,15 @@ class Card:
         else:
             raise ValueError(f"The clock mode must be 'int' or 'ext', "
                              f"not {mode!r}")
+
+    @property
+    def samplerate(self):
+        """The sampling rate of input readings."""
+        return self._samplerate
+
+    @samplerate.setter
+    def samplerate(self, val):
+        raise TypeError("The sample rate should be set using set_acquisition.")
 
     def _set_card_mode(self, mode: str) -> None:
         """Sets the card mode. The valid values are:

@@ -22,7 +22,7 @@ with Card() as adc:
     data = adc.acquire()
     # data now contains a float64 NumPy array, shaped as [nsamples, nchannels]
 
-    t = [i/10e6 for i in range(10**6)]  # Calculates the time axis.
+    t = [i/adc.samplerate for i in range(ns)]  # Calculates the time axis.
 ```
 
 An example of using the card in FIFO mode with a single trigger:

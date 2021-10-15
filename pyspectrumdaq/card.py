@@ -40,6 +40,15 @@ class Card:
             msg = f"The card type ({func_type}) is not AI ({sp.SPCM_TYPE_AI})."
             raise CardIncompatibleError(msg)
 
+        # Checks that the card has the right number of bytes per sample,
+        # this number is explicitly used in definitions of data buffers.
+        bps = self.get32(sp.SPC_MIINST_BYTESPERSAMPLE)
+        if bps != 2:
+            self.close()
+            msg = ("Only cards with 2 bytes per ADC sample are supported, "
+                   f"the found card has {bps} bytes per sample.")
+            raise CardIncompatibleError(msg)
+
         # Resets the card to prevent undefined behaviour.
         self.reset()
 
@@ -229,6 +238,8 @@ class Card:
 
             ntraces = 1  # A parameter for the memory buffer.
 
+            self.set_trigger("soft")  # Sets the defualt trigger.
+
         elif mode == "fifo_single" or mode == "fifo_multi":
 
             # Sets the number of samples to acquire per channel per trace.
@@ -238,6 +249,11 @@ class Card:
             self.set32(sp.SPC_LOOPS, 0)
 
             ntraces = 0  # A parameter for the memory buffer.
+
+            if mode == "fifo_single":
+                self.set_trigger("soft")
+            else:
+                self.set_trigger("ext")  # Software trigger can't be used in fifo_multi mode
 
         self._nsamples = nsamples
 
@@ -302,9 +318,9 @@ class Card:
             # Channel level trigger.
 
             # Checks that the trigger level is within the channel full range.
-            triglev = level / self._conversions[channel]
+            leveladc = level / self._conversions[channel]
             maxadc = self.get32(sp.SPC_MIINST_MAXADCVALUE)
-            if abs(triglev) >= maxadc:
+            if abs(leveladc) >= maxadc:
                 raise ValueError("The specified trigger level is outside "
                                  "the full range of the channel.")
 
@@ -325,7 +341,7 @@ class Card:
 
             # Finally, sets the trigger level.
             levelreg = getattr(sp, "SPC_TRIG_CH%i_LEVEL0" % channel)
-            self.set32(levelreg, int(triglev / 4))
+            self.set32(levelreg, int(leveladc / 4))
             # The division by 4 is necessary because the trigger has 14-bit
             # resolution while the card inputs have 16-bit resolution.
             # The two least significan bits of the card inputs are ignored.
@@ -463,12 +479,10 @@ class Card:
 
     @property
     def samplerate(self):
-        """The sampling rate of input readings."""
+        """The sampling rate of input readings. The value of this property 
+        is set using `set_acquisition`.
+        """
         return self._samplerate
-
-    @samplerate.setter
-    def samplerate(self, val):
-        raise TypeError("The sample rate should be set using set_acquisition.")
 
     def _set_card_mode(self, mode: str) -> None:
         """Sets the card mode. The valid values are:
@@ -577,8 +591,7 @@ class Card:
                 corresponds to an infinite number of traces. 
         """
 
-        bps = self.get32(sp.SPC_MIINST_BYTESPERSAMPLE)  # Bytes per sample.
-        trace_bsize = bps*nsamples*nchannels  # The size of one trace in bytes.
+        trace_bsize = 2*nsamples*nchannels  # The size of one trace in bytes.
 
         # Tries getting a continuous buffer. This is only expected to work
         # if an external pre-setup has been done as described in the manual.
@@ -687,8 +700,8 @@ def szTypeToName(lCardType: int) -> str:
 
 @numba.jit(nopython=True, parallel=True)
 def _convert(dst, src, scalefs):
-    """Convert an int16 2D numpy array (nsamples, nchanels) into a 2D float64 
-    numpy array using the specified conversion factors for each channel. 
+    """Converts a 2D integer numpy array (nsamples, nchanels) into a 2D float64 
+    numpy array using the specified scaling factors for the channels. 
     Stores the result in a preallocated destination array.
 
     Args:

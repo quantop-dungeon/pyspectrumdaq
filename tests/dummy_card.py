@@ -8,7 +8,9 @@ class DummyCard:
 
     def __init__(self, *args, **kwargs):
         print("Using a dummy card.")
-        pass
+
+        self._valid_fullranges_mv = [200, 500, 1000, 2000, 5000, 10000]
+        self._nchannels = 4
 
     def __enter__(self):
         return self
@@ -16,20 +18,22 @@ class DummyCard:
     def __exit__(self, *a):
         pass
 
-    def set_acquisition(self, channels = (1,), samplerate: int = 30e6,
-                        nsamples: int = 300e3, **kwargs):
-        self.samplerate = int(samplerate)
-        self.nchannels = len(channels)
-        self.nsamples = int(nsamples)
+    def set_acquisition(self, **kwargs):
+        self.samplerate = int(kwargs["samplerate"])
+        self.nchannels = len(kwargs["channels"])
+        self.nsamples = int(kwargs["nsamples"])
+
+        print("Acquisition settings:")
+        print(kwargs)
 
     def set_trigger(self, *args, **kwargs):
-        pass
+        print("Trigger settings:")
+        print(args)
+        print(kwargs)
 
     def fifo(self, convert=True):
         """Generates random traces while emulating the delays of real-time data 
         acquisition by the card."""
-
-        dt_not = 10  # Notification interval (seconds).
 
         # The sampling time of one trace (seconds).
         dt_trace = self.nsamples / self.samplerate
@@ -37,7 +41,6 @@ class DummyCard:
         cnt = 0  # The trace counter.
 
         start_time = time.time()
-        prev_not_time = start_time
         while True:
             data = random((self.nsamples, self.nchannels))
             cnt += 1
@@ -46,9 +49,5 @@ class DummyCard:
             delay = cnt * dt_trace - (now - start_time)
             if delay > 0:
                 time.sleep(delay)
-            elif (now - prev_not_time) > dt_not:
-                # Prints how far it is from real-time prformance.
-                print(f"The card is behind real time by (s): {-delay}")
-                prev_not_time = now
 
             yield data

@@ -56,12 +56,19 @@ class Card:
         self._nchannels = (self.get32(sp.SPC_MIINST_MODULES)
                            * self.get32(sp.SPC_MIINST_CHPERMODULE))
 
+        # Reads the list of full ranges for the channels.
+        nfullranges = self.get32(sp.SPC_READIRCOUNT)
+        self._valid_fullranges_mv = []
+        for i in range(nfullranges):
+            rngreg = getattr(sp, "SPC_READRANGEMAX%i" % i)
+            self._valid_fullranges_mv.append(self.get32(rngreg))
+
         # Reads which channels are enabled.
-        self._acq_channels = ()
+        self._acq_channels = []
         chan_mask = self.get32(sp.SPC_CHENABLE)
         for n in range(self._nchannels):
             if chan_mask & getattr(sp, "CHANNEL%i" % n):
-                self._acq_channels += (n,)
+                self._acq_channels.append(n)
 
         # Sampling rate in Hz.
         self._samplerate = self.get64(sp.SPC_SAMPLERATE)
@@ -204,61 +211,70 @@ class Card:
         samplerate = int(samplerate)
         mode = mode.lower()
 
-        # Checks the consistency of input values.
-        if nsamples % 4 != 0:
-            nsamples = int(4 * round(nsamples / 4.))
-            print(f"The number of samples was changed to {nsamples} because "
-                  f"this number has to be divisible by 4.")
-
-        if nsamples / samplerate > timeout:
-            timeout = int(1.1 * nsamples / samplerate)
-            print(f"The timeout is extended to {timeout} seconds to be greater "
-                  f"than the acquisition time for a single trace.")
-
         # Enables and configures the specified channels and sets the card mode.
         self._set_channels(channels, terminations, fullranges)
         self._set_card_mode(mode)
+
+        if mode == "std_single":
+
+            if nsamples % 4 != 0:
+                nsamples = max(4 * round(nsamples / 4), 8)
+                print(f"The number of samples was changed to {nsamples} because"
+                      f" this number has to be divisible by 4 and minimum 8.")
+
+            # Sets the number of samples per channel to acquire in one run.
+            self.set64(sp.SPC_MEMSIZE, nsamples)  
+
+            self.set_trigger("soft")  # Sets the defualt trigger.
+
+        elif mode == "fifo_single" or mode == "fifo_multi":
+
+            if nsamples % 2048 != 0:
+                nsamples = max(2048 * round(nsamples / 2048), 2048)
+                print(f"The number of samples was changed to {nsamples} because"
+                      " this number has to be divisible by 2048 in FIFO modes.")
+
+                # Here, the limitation comes not from the FIFO mode itself,
+                # but from the fact that we want to get notified when exactly 
+                # one trace is acquired. The notification size is a multiple 
+                # of 4096 bytes.
+
+            # Sets the number of samples to acquire per channel per trace.
+            self.set64(sp.SPC_SEGMENTSIZE, nsamples) 
+
+            # Configures the card for indefinite acquisition.
+            self.set32(sp.SPC_LOOPS, 0)
+
+            if mode == "fifo_single":
+                self.set_trigger("soft")
+            else:
+                # Software trigger can't be used in fifo_multi mode, so 
+                # the trigger is set to external.
+                self.set_trigger("ext")
+
+        self._nsamples = nsamples
 
         # Sets the sampling rate and reads it back, because the card can round 
         # this number without giving an error.
         self.set64(sp.SPC_SAMPLERATE, samplerate)
         self._samplerate = self.get64(sp.SPC_SAMPLERATE)
 
-        # Setting the posttrigger value which has to be a multiple of 4.
-        pretrig = np.clip(((nsamples*pretrig_ratio) // 4) * 4, 4, nsamples-4)
-        self.set64(sp.SPC_POSTTRIGGER, nsamples - int(pretrig))
+        # Sets the number of samples to be acquired after the trigger,
+        # it should be a multiple of 4 and minimum 4. This value is ignored
+        # in fifo_single mode.  
+        posttrig = max(4 * round(nsamples * (1. - pretrig_ratio) / 4), 4)
+        self.set64(sp.SPC_POSTTRIGGER, posttrig)
+
+        if nsamples / samplerate > timeout:
+            timeout = int(1.1 * nsamples / samplerate)
+            print(f"The timeout is extended to {timeout} seconds to be greater "
+                  f"than the acquisition time for a single trace.")
 
         # Sets the timeout value after converting it to milliseconds.
         self.set32(sp.SPC_TIMEOUT, int(timeout * 1e3))
 
-        if mode == "std_single":
-
-            # Sets the number of samples per channel to acquire in one run.
-            self.set64(sp.SPC_MEMSIZE, nsamples)
-
-            ntraces = 1  # A parameter for the memory buffer.
-
-            self.set_trigger("soft")  # Sets the defualt trigger.
-
-        elif mode == "fifo_single" or mode == "fifo_multi":
-
-            # Sets the number of samples to acquire per channel per trace.
-            self.set64(sp.SPC_SEGMENTSIZE, nsamples)
-
-            # Configures the card for indefinite acquisition.
-            self.set32(sp.SPC_LOOPS, 0)
-
-            ntraces = 0  # A parameter for the memory buffer.
-
-            if mode == "fifo_single":
-                self.set_trigger("soft")
-            else:
-                self.set_trigger("ext")  # Software trigger can't be used in fifo_multi mode
-
-        self._nsamples = nsamples
-
-        # Allocates a buffer and configures the data transfer.
-        self._create_buffer(len(channels), nsamples, ntraces)
+        # Creates an appropriate buffer for DMA transfer.
+        self._create_buffer(len(channels), nsamples, mode)
 
     def set_trigger(self, mode: str = "soft", channel: int = 0,
                     edge: str = "pos", level: float = 0) -> None:
@@ -528,7 +544,7 @@ class Card:
             raise ValueError("The number of activated channels has to be 2^n.")
 
         if not all((n in range(self._nchannels)) for n in channels):
-            raise ValueError("Some channel numbers are invalid")
+            raise ValueError("Some channel numbers are invalid.")
 
         # Sort all the arrays.
         sort_idx = np.argsort(channels)
@@ -536,7 +552,7 @@ class Card:
         terminations = np.array(terminations)[sort_idx]
         fullranges = np.array(fullranges)[sort_idx]
 
-        # Enables the channels by creating a CHENABLE mask and applying it
+        # Enables the channels by creating a CHENABLE mask and applying it.
         chan_mask = 0
 
         for ch_n in channels:
@@ -548,16 +564,17 @@ class Card:
         maxadc = self.get32(sp.SPC_MIINST_MAXADCVALUE)
 
         for ch_n, term, fullrng in zip(channels, terminations, fullranges):
-            fullrng = int(fullrng * 1000)
+            fullrng_mv = int(fullrng * 1000)
 
-            if fullrng in [200, 500, 1000, 2000, 5000, 10000]:
+            if fullrng_mv in self._valid_fullranges_mv:
                 range_reg = getattr(sp, "SPC_AMP%i" % ch_n)
-                self.set32(range_reg, fullrng)
+                self.set32(range_reg, fullrng_mv)
 
-                conversion = float(fullrng) / 1000 / maxadc
-                self._conversions[ch_n] = conversion
+                self._conversions[ch_n] = fullrng / maxadc
             else:
-                raise ValueError("The specified voltage range is invalid.")
+                raise ValueError(f"The specified voltage range {fullrng_mv} mV"
+                                 "is not one of the allowed ones: "
+                                 f"{self._valid_fullranges_mv}.")
 
             if term == "1M":
                 term_val = 0
@@ -569,29 +586,21 @@ class Card:
             term_param = getattr(sp, "SPC_50OHM%i" % ch_n)
             self.set32(term_param, term_val)
 
-    def _create_buffer(self, nchannels: int, nsamples: int, 
-                       ntraces: int) -> None:
+    def _create_buffer(self, nchannels: int, nsamples: int, mode: str) -> None:
         """Allocates a buffer for data transfer. The buffer size is always equal
-        to the size of an integer number of traces, which is smaller or equal 
-        to `ntraces`. 
-
-        Uses a continuous memory buffer if it is available and can accomodate 
-        at least one trace. In this case the buffer size is also rounded to 
-        an integer number of traces.
-
-        The notification size is always set to the size of one trace.
+        to the size of an integer number of traces. Uses a continuous memory 
+        buffer if it is available and can accomodate at least one trace. 
 
         Args:
             nchannels: 
                 The number of acquisition channels.
             nsamples:
                 The number of samples per trace per channel.
-            ntraces: 
-                The number of traces to acquire in total. If set to zero, this 
-                corresponds to an infinite number of traces. 
+            mode: 
+                The card mode. 
         """
 
-        trace_bsize = 2*nsamples*nchannels  # The size of one trace in bytes.
+        trace_bsize = 2 * nsamples * nchannels  # The trace size in bytes.
 
         # Tries getting a continuous buffer. This is only expected to work
         # if an external pre-setup has been done as described in the manual.
@@ -600,15 +609,13 @@ class Card:
         err = sp.spcm_dwGetContBuf_i64(self._hCard, sp.SPCM_BUF_DATA,
                                        byref(self._pvBuffer),
                                        byref(qwContBufLen))
-
         if err != sp.ERR_OK:
             raise CardError(self.get_error_info())
 
         if qwContBufLen.value >= trace_bsize:
             print("Using a continuous buffer.")
 
-            # Rounds the size of the received buffer to an integer
-            # number of traces.
+            # Rounds the size of the buffer to an integer number of traces.
             nbufftraces = qwContBufLen.value // trace_bsize
         else:
             # Creates a regular buffer.
@@ -616,17 +623,17 @@ class Card:
             # Reads the card memory size in bytes.
             card_mem_lim = self.get64(sp.SPC_PCIMEMSIZE)
 
-            if ntraces == 0 or (ntraces * trace_bsize) > card_mem_lim:
+            if mode == "fifo_single" or mode == "fifo_multi":
                 nbufftraces = max((card_mem_lim // trace_bsize), 1)
 
-                # In this case, the acquisition proceeds indefinitely or
-                # the total size of acquired traces is larger than the card
-                # memory size. Both situations are fine in FIFO modes.
+                # In FIFO modes, data acquisition can proceed indefinitely.
                 # On the card side, all its memory can be used as a buffer.
                 # We allocate a buffer of the same size (modulo the trace size)
                 # on the computer.
+            elif mode == "std_single":
+                nbufftraces = 1
             else:
-                nbufftraces = ntraces
+                raise ValueError(f"Invalid card mode {mode}.")
 
             self._pvBuffer = sp.create_string_buffer(trace_bsize * nbufftraces)
             print("Using a regular buffer.")

@@ -4,6 +4,7 @@ from time import time
 from multiprocessing import Process
 from multiprocessing import Value
 from multiprocessing import Array
+from multiprocessing import Pipe
 
 import numpy as np
 from numpy.fft import fftfreq  # TODO: replace this with manual calculation
@@ -17,21 +18,16 @@ from pyqtgraph.Qt import QtGui
 
 from rtsui import Ui_RtsWidget
 
-from .card import Card
+#from .card import Card
+from dummy_card import DummyCard as Card
 
-def daq(settings: dict, buff, buff_acc, buff_t, cnt, navg, navg_completed, stop_flag) -> None:
+def daq(settings: dict, conn, buff, buff_acc, buff_t, cnt, navg, navg_completed) -> None:
     """ Starts continuous data streaming from the card. """
     
     lbuff = len(buff)  # The number of buffered traces.
     nf = len(buff[0])  # The number of frequency axis bins.
 
     ntds = len(buff_t[0])  # The number of samples in the time-domain buffer.
-
-    navg_rt = settings.pop("naverages_rt")
-    trig_mode = settings.pop("trig_mode")
-
-    cnt.value = 0  # The number of acquired traces is this value times TODO: navg_rt
-    navg_completed.value = 0
 
     # Represents the buffers as a numpy arrays.
     npbuff = [np.frombuffer(a.get_obj()) for a in buff]
@@ -49,72 +45,90 @@ def daq(settings: dict, buff, buff_acc, buff_t, cnt, navg, navg_completed, stop_
     
     y = np.zeros(nf, dtype=np.float64)   # Abs spectrum squared.
 
-    with Card() as adc:
-        adc.set_acquisition(**settings)
-        adc.set_trigger(trig_mode)
+    while True:
+        navg_rt = settings.pop("naverages_rt")
+        trig_mode = settings.pop("trig_mode")
 
-        i = 0  # The index inside the main buffer.
-        j = 0  # The fast accumulation counter.
+        with Card() as adc:
+            # TODO: set clock mode before setting acquisition.
+            adc.set_acquisition(**settings)
+            adc.set_trigger(trig_mode)
 
-        dt_trace = nsamples / adc.samplerate  # The time of one trace.
-        dt_not = 15  # Notification interval (seconds).
+            j = 0  # The fast accumulation counter.
 
-        start_time = time()
-        prev_not_time = start_time
+            cnt.value = 0  # The number of acquired traces is this value times TODO: divided by navg_rt
+            navg_completed.value = 0
 
-        for data in adc.fifo():
-            a[:] = data[:, 0]
-            calc_fft()
-            calc_abs_square(y, b)
-            # Now there is a new absolute squared FFT result stored in y.
+            dt_trace = nsamples / adc.samplerate  # The time of one trace.
+            dt_not = 15  # Notification interval (seconds).
 
-            if j == 0:
-                buff[i].acquire()
-                npbuff[i][:] = y
-            else:
-                add_array(npbuff[i], y)
+            n_slow_update = max(int(0.5 / dt_trace / navg_rt), 1)
 
-            j += 1
+            start_time = time()
+            prev_not_time = start_time
 
-            if j == navg_rt:
-                now = time()
+            for data in adc.fifo():
+                a[:] = data[:, 0]
+                calc_fft()
+                calc_abs_square(y, b)
+                # Now there is a new absolute squared FFT result stored in y.
 
-                # Updates the time domain data.
-                npbuff_t[i][:] = data[: ntds, 0]
+                i = (cnt.value % lbuff)   # The index inside the main buffer.
 
-                # Releases the buffer lock so that the new spectrum and time
-                # domain data can be read by the ui process.
-                buff[i].release()
-
-                # Increments the counter of acquired traces and the index within the buffer.
-                cnt.value += 1
-                i = (cnt.value % lbuff)
-
-                # Resets the fast averaging counter.
-                j = 0
-
-                delay = (now - start_time) - navg_rt * cnt.value * dt_trace
-                if delay > 0 and (now - prev_not_time) > dt_not:
-                    # Prints how far it is from real-time prformance.
-                    print(f"The data reading is behind real time by (s): {delay}")
-                    prev_not_time = now
-
-            # Adds the trace to the accumulator buffer, which is independent of the fast averaging.
-            navg_c = navg.value
-            cmpl_c = navg_completed.value
-
-            if cmpl_c < navg_c:
-                if cmpl_c == 0:
-                    npbuff_acc[:] = y
+                if j == 0:
+                    buff[i].acquire()
+                    npbuff[i][:] = y
                 else:
-                    add_array(npbuff_acc, y)
+                    add_array(npbuff[i], y)
 
-                navg_completed.value += 1
+                j += 1
 
-            # Checks if there has been a command to stop and exit.
-            if stop_flag.value:
-                cnt.value = 0
-                break
+                if j == navg_rt:
+
+                    # Updates the time domain data.
+                    npbuff_t[i][:] = data[: ntds, 0]
+
+                    # Releases the buffer lock so that the new spectrum and time
+                    # domain data can be read by the ui process.
+                    buff[i].release()
+
+                    cnt.value += 1
+
+                    j = 0  # Resets the fast averaging counter.
+
+                    if cnt.value % n_slow_update == 0:
+                        now = time()
+                        delay = (now - start_time) - navg_rt * cnt.value * dt_trace
+
+                        if delay > 0 and (now - prev_not_time) > dt_not:
+                            # Prints how far it is from real-time prformance.
+                            print(f"The data reading is behind real time by (s): {delay}")
+                            prev_not_time = now
+
+                        # The conncetion breaks if polled too frequently.
+                        if conn.poll():
+                            break
+
+                # Adds the trace to the accumulator buffer, which is independent of the fast averaging.
+                navg_c = navg.value
+                cmpl_c = navg_completed.value
+
+                if cmpl_c < navg_c:
+                    if cmpl_c == 0:
+                        npbuff_acc[:] = y
+                    else:
+                        add_array(npbuff_acc, y)
+
+                    navg_completed.value += 1
+
+        msg = conn.recv()
+
+        # The message can be of only two kinds, a request to stop and a settings update.
+        if msg == "stop":
+            cnt.value = 0
+            break
+        else:
+            settings = msg
 
 
 class RtsWindow(QtGui.QMainWindow):
@@ -131,8 +145,9 @@ class RtsWindow(QtGui.QMainWindow):
         # Shared variables for interprocess communication.
         self.navg = Value("i", 0, lock=False)
         self.navg_completed = Value("i", 0, lock=False)
-        self.stop_daq_flag = Value("b", 0, lock=False)
         self.w_cnt = Value("i", 0, lock=False)
+
+        self.pipe_conn = None
 
         self.r_cnt = 0
 
@@ -206,9 +221,9 @@ class RtsWindow(QtGui.QMainWindow):
         self.ui.fullrangeComboBox.currentIndexChanged.connect(self.on_channel_param_change)
         self.ui.terminationComboBox.currentIndexChanged.connect(self.on_channel_param_change)
 
-        self.ui.trigmodeComboBox.currentIndexChanged.connect(self.start_daq)
+        self.ui.trigmodeComboBox.currentIndexChanged.connect(self.update_daq_settings)
 
-        self.ui.samplerateLineEdit.editingFinished.connect(self.start_daq)
+        self.ui.samplerateLineEdit.editingFinished.connect(self.update_daq_settings)
         self.ui.nsamplesLineEdit.editingFinished.connect(self.start_daq)
 
         self.ui.averagePushButton.clicked.connect(self.start_averaging)
@@ -313,11 +328,13 @@ class RtsWindow(QtGui.QMainWindow):
         self.buff_t = [Array("d", int(ns // self.tdds), lock=False) for _ in range(lbuff)]
         self.npbuff_t = [np.frombuffer(a) for a in self.buff_t]
 
-        # daq(settings, buff, buff_acc, buff_t, ind, navg, avg_completed, stop_flag)
+        conn1, conn2 = Pipe()
+        self.pipe_conn = conn1
+
+        # daq(settings, conn, buff, buff_acc, buff_t, ind, navg, avg_completed)
         self.daq_proc = Process(target=daq,
-                                args=(settings, self.buff, self.buff_acc, self.buff_t,
-                                      self.w_cnt, self.navg, self.navg_completed,
-                                      self.stop_daq_flag),
+                                args=(settings, conn2, self.buff, self.buff_acc, self.buff_t,
+                                      self.w_cnt, self.navg, self.navg_completed),
                                 daemon=True)
         self.daq_proc.start()
 
@@ -327,9 +344,10 @@ class RtsWindow(QtGui.QMainWindow):
     def stop_daq(self):
 
         # Tells the daq process to finish, waits until it does, and resets the flag.
-        self.stop_daq_flag.value = True
+        self.pipe_conn.send("stop")
         self.daq_proc.join()
-        self.stop_daq_flag.value = False
+
+        del self.pipe_conn
 
         del self.buff[:]
         del self.npbuff[:]
@@ -341,6 +359,17 @@ class RtsWindow(QtGui.QMainWindow):
         self.r_cnt = 0
 
         self.averging_now = False
+
+    def update_daq_settings(self):
+        settings = self.get_settings_from_ui()
+
+        if settings != self.current_settings:
+            self.current_settings = settings
+
+            self.r_cnt = 0
+            self.averging_now = False
+
+            self.pipe_conn.send(settings)
 
     def start_averaging(self):
         self.set_navg()
@@ -418,7 +447,7 @@ class RtsWindow(QtGui.QMainWindow):
             ind = uielem.findData(self.card_terminations[ch])
             uielem.setCurrentIndex(ind)
 
-        self.start_daq()
+        self.update_daq_settings()
 
     def on_channel_param_change(self):
         ch = self.ui.channelComboBox.currentData()
@@ -429,7 +458,7 @@ class RtsWindow(QtGui.QMainWindow):
         print(self.card_fullranges_mv)
         print(self.card_terminations)
 
-        self.start_daq()
+        self.update_daq_settings()
 
     def set_navg(self):
         navg = int(self.ui.naveragesLineEdit.text())
@@ -545,3 +574,8 @@ def divide_array(a, c):
     """
     for i in numba.prange(a.shape[0]):
         a[i] = a[i] / c
+
+
+
+if __name__ == '__main__':
+    rts()

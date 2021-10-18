@@ -500,6 +500,13 @@ class Card:
         """
         return self._samplerate
 
+    @property
+    def nsamples(self):
+        """The number of samples per channel in one trace. The value of 
+        this property is set using `set_acquisition`.
+        """
+        return self._nsamples
+
     def _set_card_mode(self, mode: str) -> None:
         """Sets the card mode. The valid values are:
 

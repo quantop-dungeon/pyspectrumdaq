@@ -18,6 +18,9 @@
     font: 8pt &quot;Open Sans&quot;;
     background-color: white;
 }
+QLabel {
+	padding: 1px 3px 1px 3px; /*top right bottom left*/
+}
 QLineEdit {
 	padding: 1px 3px 1px 3px; /*top right bottom left*/
 }

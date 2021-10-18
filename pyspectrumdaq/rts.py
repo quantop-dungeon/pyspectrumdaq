@@ -17,8 +17,7 @@ from pyqtgraph.Qt import QtGui
 
 from rtsui import Ui_RtsWidget
 
-from pyspectrumdaq import Card  # TODO: cahnge this to a relative import
-
+from .card import Card
 
 def daq(settings: dict, buff, buff_acc, buff_t, cnt, navg, navg_completed, stop_flag) -> None:
     """ Starts continuous data streaming from the card. """
@@ -41,10 +40,12 @@ def daq(settings: dict, buff, buff_acc, buff_t, cnt, navg, navg_completed, stop_
 
     # Auxiliary arrays for the calcualtion of FFT.
     nsamples = 2 * (nf - 1)
-    a = pyfftw.empty_aligned(2 * (nf - 1), dtype='float64')
-    b = pyfftw.empty_aligned(nf, dtype='complex128')
+    a = pyfftw.empty_aligned(2 * (nf - 1), dtype="float64")
+    b = pyfftw.empty_aligned(nf, dtype="complex128")
     
-    calc_fft = pyfftw.FFTW(a, b)
+    calc_fft = pyfftw.FFTW(a, b, flags=["FFTW_ESTIMATE"])
+    # Using FFTW_ESTIMATE flag significantly reduces startup time at 
+    # the expense of a less than 5 % reduction in speed.
     
     y = np.zeros(nf, dtype=np.float64)   # Abs spectrum squared.
 
@@ -95,8 +96,7 @@ def daq(settings: dict, buff, buff_acc, buff_t, cnt, navg, navg_completed, stop_
                 delay = (now - start_time) - navg_rt * cnt.value * dt_trace
                 if delay > 0 and (now - prev_not_time) > dt_not:
                     # Prints how far it is from real-time prformance.
-                    print(
-                        f"The data reading is behind real time by (s): {delay}")
+                    print(f"The data reading is behind real time by (s): {delay}")
                     prev_not_time = now
 
             # Adds the trace to the accumulator buffer, which is independent of the fast averaging.
@@ -152,13 +152,13 @@ class RtsWindow(QtGui.QMainWindow):
         self.averging_now = False
 
         self.line = self.ui.plotWidget.plot()  # Real-time trace display.
-        self.line.setPen((250, 0, 50))
+        self.line.setPen((250, 0, 0))
 
         self.line_ref = self.ui.plotWidget.plot()  # Reference trace display.
-        self.line_ref.setPen((50, 0, 200))
+        self.line_ref.setPen((20, 20, 20))
 
         self.line_td = self.ui.scopePlot.plot()  # Time domain display.
-        self.line_td.setPen((0, 0, 0))
+        self.line_td.setPen((126, 47, 142))
 
         # TODO: read the parameters below from the card.
         self.card_fullranges_mv = [10000, 10000, 10000, 10000]
@@ -246,20 +246,20 @@ class RtsWindow(QtGui.QMainWindow):
             # Updates the time domain display.
             self.line_td.setData(self.xtd, ytd)
 
-            if self.averging_now:
-                navg_c = self.navg.value
-                cmpl_c = self.navg_completed.value
+        if self.averging_now:
+            navg_c = self.navg.value
+            cmpl_c = self.navg_completed.value
 
-                self.ui.averagesCompletedLabel.setText(str(cmpl_c))
+            self.ui.averagesCompletedLabel.setText(str(cmpl_c))
 
-                if cmpl_c >= navg_c:
-                    self.averging_now = False
+            if cmpl_c >= navg_c:
+                self.averging_now = False
 
-                    self.yfd_ref = self.npbuff_acc.copy()
-                    divide_array(self.yfd_ref, cmpl_c)
+                self.yfd_ref = self.npbuff_acc.copy()
+                divide_array(self.yfd_ref, cmpl_c)
 
-                    # Displays the reference trace.
-                    self.line_ref.setData(self.xfd, self.yfd_ref)
+                # Displays the reference trace.
+                self.line_ref.setData(self.xfd, self.yfd_ref)
 
     def start_daq(self):
         """Starts data acquisition in a separate process with present settings.
@@ -388,12 +388,12 @@ class RtsWindow(QtGui.QMainWindow):
             uielem.setCurrentIndex(ch)
 
         with NoSignals(self.ui.fullrangeComboBox) as uielem:
-            fr = settings["fullranges"][0] 
+            fr_mv = int(1000 * settings["fullranges"][0])   # Full range in mV.
 
-            ind = uielem.findData(int(1000 * fr))  # The data is in mV.
+            ind = uielem.findData(fr_mv) 
             uielem.setCurrentIndex(ind)
 
-            self.card_fullranges_mv[ch] = fr
+            self.card_fullranges_mv[ch] = fr_mv
 
         with NoSignals(self.ui.terminationComboBox) as uielem:
             term = settings["terminations"][0]
@@ -484,7 +484,7 @@ class RtsWidget(QtGui.QWidget, Ui_RtsWidget):
         self.scopePlot.getAxis("top").setStyle(showValues=False)
         self.scopePlot.getAxis("right").setStyle(showValues=False) 
 
-        # TODO: change the plot line color to black, add frame, remove axes for the time domain plot.
+        # TODO: add frame, remove axes for the time domain plot.
 
 
 def rts():
@@ -545,7 +545,3 @@ def divide_array(a, c):
     """
     for i in numba.prange(a.shape[0]):
         a[i] = a[i] / c
-
-
-if __name__ == '__main__':
-    rts()

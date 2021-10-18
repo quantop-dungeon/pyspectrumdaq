@@ -60,8 +60,8 @@ class Card:
         nfullranges = self.get32(sp.SPC_READIRCOUNT)
         self._valid_fullranges_mv = []
         for i in range(nfullranges):
-            rngreg = getattr(sp, "SPC_READRANGEMAX%i" % i)
-            self._valid_fullranges_mv.append(self.get32(rngreg))
+            rng = self.get32(sp.SPC_READRANGEMAX0 + i)
+            self._valid_fullranges_mv.append(rng)
 
         # Reads which channels are enabled.
         self._acq_channels = []

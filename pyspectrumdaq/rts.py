@@ -17,7 +17,7 @@ from pyqtgraph.Qt import QtGui
 
 from rtsui import Ui_RtsWidget
 
-from . import Card
+from pyspectrumdaq import Card  # TODO: cahnge this to a relative import
 
 
 def daq(settings: dict, buff, buff_acc, buff_t, cnt, navg, navg_completed, stop_flag) -> None:

@@ -18,10 +18,30 @@ class DummyCard:
     def __exit__(self, *a):
         pass
 
+    def reset(self):
+        pass
+
+    def close(self):
+        pass
+
     def set_acquisition(self, **kwargs):
-        self.samplerate = int(kwargs["samplerate"])
+        samplerate = int(kwargs["samplerate"])
         self.nchannels = len(kwargs["channels"])
-        self.nsamples = int(kwargs["nsamples"])
+        
+        nsamples = int(kwargs["nsamples"])
+
+        if nsamples % 2048 != 0:
+            nsamples = max(2048 * round(nsamples / 2048), 2048)
+            print(f"The number of samples was changed to {nsamples} because"
+                    " this number has to be divisible by 2048 in FIFO modes.")
+
+        if samplerate % 2048 != 0:
+            samplerate = max(2048 * round(samplerate / 2048), 2048)
+            print(f"The samplerate was changed to {samplerate} because"
+                    " this number has to be divisible by 2048 in dummy modes.")
+
+        self.samplerate = samplerate
+        self.nsamples = nsamples
 
         print("Acquisition settings:")
         print(kwargs)

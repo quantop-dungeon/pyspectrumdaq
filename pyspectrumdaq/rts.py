@@ -208,8 +208,12 @@ class RtsWindow(QtGui.QMainWindow):
         self.yfd_ref = None
         self.xtd = None
 
+        # Creates a timer that will start a data acquisition process once the app is running.
+        QtCore.QTimer.singleShot(10, self.start_daq) 
+
+        # Starts a timer that will periodically update the ui and the plots.
         self.updateTimer = QtCore.QTimer()
-        self.updateTimer.timeout.connect(self.update_plot)
+        self.updateTimer.timeout.connect(self.update_ui)
         self.updateTimer.start(0)
 
     def createUi(self):
@@ -243,7 +247,7 @@ class RtsWindow(QtGui.QMainWindow):
         del event  # Unused but required by the signature.
         self.stop_daq()
 
-    def update_plot(self):
+    def update_ui(self):
         lbuff = len(self.buff)
         w_cnt = self.w_cnt.value  # The counter value of the writing process.
 
@@ -540,8 +544,6 @@ def rts():
 
     mw = RtsWindow()
     mw.show()
-
-    mw.start_daq()
 
     QtGui.QApplication.instance().exec_()
 

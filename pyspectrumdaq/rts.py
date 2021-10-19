@@ -15,9 +15,10 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore
 from pyqtgraph.Qt import QtGui
 
-from rtsui import Ui_RtsWidget
+from .rtsui import Ui_RtsWidget
 
 from .card import Card
+#from dummy_card import DummyCard as Card
 
 def daq(settings: dict, buff, buff_acc, buff_t, cnt, navg, navg_completed, stop_flag) -> None:
     """ Starts continuous data streaming from the card. """

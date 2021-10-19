@@ -1,3 +1,4 @@
 from pyspectrumdaq import rts
 
-rts()
+if __name__ == "__main__":
+    rts()

@@ -84,7 +84,7 @@ class Card:
         self._pvBuffer = None  # A handle to a buffer for DMA data transfer.
         self._buffer = None    # A handle to the same buffer as a numpy array.
         self._nbufftraces = 0  # The size of the buffer in traces.
-        self._trace_bsize = 0  # The size of each trace in bytes.
+        self._trace_nbytes = 0  # The size of one trace in bytes.
 
         # The factors for converting between ADC values and voltages
         # (for all channels, not the ones that are enabled).
@@ -150,6 +150,12 @@ class Card:
         """Closes the connection to the card."""
         sp.spcm_vClose(self._hCard)
 
+        # After the connection is closed, the card object is useless, 
+        # while it may still hold references to a substantial memory buffer.
+        # This buffer is freed here.
+        del self._pvBuffer
+        del self._buffer
+
     def reset(self) -> None:
         """Resets the card to default settings."""
         self.set32(sp.SPC_M2CMD, sp.M2CMD_CARD_RESET)
@@ -164,8 +170,6 @@ class Card:
     def __exit__(self, *a):
         """Closes the card connection and frees the memory buffer."""
         self.close()
-        del self._pvBuffer
-        del self._buffer
 
     def set_acquisition(self,
                         mode: str = "std_single",
@@ -388,7 +392,7 @@ class Card:
         # This has to be done for every acquisition.
         err = sp.spcm_dwDefTransfer_i64(self._hCard, sp.SPCM_BUF_DATA,
                                         sp.SPCM_DIR_CARDTOPC, 0,
-                                        self._pvBuffer, 0, self._trace_bsize)
+                                        self._pvBuffer, 0, self._trace_nbytes)
 
         if err != sp.ERR_OK:
             raise CardError(self.get_error_info())
@@ -411,10 +415,13 @@ class Card:
 
         return data
 
-    def fifo(self, convert: bool = True) -> Generator:
+    def fifo(self, n: int = 0, convert: bool = True) -> Generator:
         """Acquires one trace without time axis in FIFO mode.
 
         Args:
+            n:
+                The number of traces to acquire after which the FIFO stops. 
+                Zero corresponds to indefinite acquisition.  
             convert:
                 Specifies if the data should be converted to voltages (True) 
                 or returned directly as ADC readings (False). ADC readings can 
@@ -431,11 +438,11 @@ class Card:
                                "or fifo_multi mode.")
 
         # Defines data transfer with a notification for every new trace.
-        buff_size = self._nbufftraces * self._trace_bsize
-        notify_size = self._trace_bsize
+        buff_nbytes = self._nbufftraces * self._trace_nbytes
+        notify_nbytes = self._trace_nbytes
         err = sp.spcm_dwDefTransfer_i64(self._hCard, sp.SPCM_BUF_DATA,
-                                        sp.SPCM_DIR_CARDTOPC, notify_size,
-                                        self._pvBuffer, 0, buff_size)
+                                        sp.SPCM_DIR_CARDTOPC, notify_nbytes,
+                                        self._pvBuffer, 0, buff_nbytes)
 
         if err != sp.ERR_OK:
             raise CardError(self.get_error_info())
@@ -445,7 +452,7 @@ class Card:
         nchannels = len(self._acq_channels)
         cfs = tuple(self._conversions[n] for n in self._acq_channels)
 
-        i = 0  # Initializes the buffer segment counter.
+        cnt = 0  # Init a trace counter.
 
         # Starts the card, enables the trigger, starts data transfer 
         # and waits for the first segment of data to arrive.
@@ -454,6 +461,8 @@ class Card:
         self.set32(sp.SPC_M2CMD, start_cmd)
 
         while True:
+            i = cnt % self._nbufftraces  # The buffer segment counter.
+
             if convert:
                 # Converts the data to voltage readings.
                 data = np.zeros((ns, nchannels), dtype=np.float64)
@@ -463,17 +472,18 @@ class Card:
                 data = self._buffer[i * ns: (i + 1) * ns, :].copy()
 
             # Notifies that some space in the buffer is free for writing again.
-            self.set64(sp.SPC_DATA_AVAIL_CARD_LEN, self._trace_bsize)
+            self.set64(sp.SPC_DATA_AVAIL_CARD_LEN, self._trace_nbytes)
 
             yield data
 
+            cnt += 1
+
+            if n and cnt == n:
+                self.stop()
+                break
+
             # Waits for a new segment of data in the buffer.
             self.set32(sp.SPC_M2CMD, sp.M2CMD_DATA_WAITDMA)
-
-            # Increments the segment counter in a circular manner.
-            i += 1
-            if i >= self._nbufftraces:
-                i = 0
 
     def set_clock(self, mode: str = "int", ext_freq: int = 10000000) -> None:
         """Sets the clock mode, which can be internal ('int') or 
@@ -607,7 +617,7 @@ class Card:
                 The card mode. 
         """
 
-        trace_bsize = 2 * nsamples * nchannels  # The trace size in bytes.
+        trace_nbytes = 2 * nsamples * nchannels  # The trace size in bytes.
 
         # Tries getting a continuous buffer. This is only expected to work
         # if an external pre-setup has been done as described in the manual.
@@ -619,11 +629,11 @@ class Card:
         if err != sp.ERR_OK:
             raise CardError(self.get_error_info())
 
-        if qwContBufLen.value >= trace_bsize:
+        if qwContBufLen.value >= trace_nbytes:
             print("Using a continuous buffer.")
 
             # Rounds the size of the buffer to an integer number of traces.
-            nbufftraces = qwContBufLen.value // trace_bsize
+            nbufftraces = qwContBufLen.value // trace_nbytes
         else:
             # Creates a regular buffer.
 
@@ -631,7 +641,7 @@ class Card:
             card_mem_lim = self.get64(sp.SPC_PCIMEMSIZE)
 
             if mode == "fifo_single" or mode == "fifo_multi":
-                nbufftraces = max((card_mem_lim // trace_bsize), 1)
+                nbufftraces = max((card_mem_lim // trace_nbytes), 1)
 
                 # In FIFO modes, data acquisition can proceed indefinitely.
                 # On the card side, all its memory can be used as a buffer.
@@ -642,25 +652,15 @@ class Card:
             else:
                 raise ValueError(f"Invalid card mode {mode}.")
 
-            self._pvBuffer = sp.create_string_buffer(trace_bsize * nbufftraces)
+            self._pvBuffer = sp.create_string_buffer(trace_nbytes * nbufftraces)
             print("Using a regular buffer.")
 
         self._nbufftraces = nbufftraces
-        self._trace_bsize = trace_bsize
+        self._trace_nbytes = trace_nbytes
 
-        # For the convenience of access, we also represent the allocated buffer
-        # as a 2D numpy array of 16 bit integers.
-        arr = np.frombuffer(self._pvBuffer, dtype=np.int16)
-        self._buffer = np.reshape(arr, (nbufftraces * nsamples, nchannels))
-
-        # Another way of recasting the buffer is given below. It works, but 
-        # causes memory leak: after del self._buffer and del self._pvBuffer, 
-        # the memory they point to is not freed. Apparently, ctypes.cast is
-        # the culprit, see https://stackoverflow.com/questions/61479041/ctypes-does-not-free-string-buffers
-        #
-        # pnData = cast(self._pvBuffer, sp.ptr16)
-        # dim = (nbufftraces * nsamples, nchannels)
-        # self._buffer = np.ctypeslib.as_array(pnData, shape=dim)
+        # Represents the buffer as a 2D numpy array.
+        self._buffer = np.ndarray((nbufftraces * nsamples, nchannels), 
+                                  dtype=np.int16, buffer=self._pvBuffer)
 
 
 class CardError(Exception):

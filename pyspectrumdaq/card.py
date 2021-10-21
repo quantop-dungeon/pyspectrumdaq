@@ -658,7 +658,7 @@ class Card:
             self._pvBuffer = sp.create_string_buffer(trace_nbytes * nbufftraces)
             print("Using a regular buffer.")
 
-        # Represents the buffer as a list of arrays each containing one trace.
+        # Represents the buffer as a list of arrays each sized for one trace.
         self._buffer = [np.ndarray((nsamples, nchannels), 
                                    dtype=np.int16, 
                                    buffer=self._pvBuffer, 

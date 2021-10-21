@@ -262,9 +262,10 @@ class Card:
         self._samplerate = self.get64(sp.SPC_SAMPLERATE)
 
         # Sets the number of samples to be acquired after the trigger,
-        # it should be a multiple of 4 and minimum 4. This value is ignored
-        # in fifo_single mode.  
-        posttrig = max(4 * round(nsamples * (1. - pretrig_ratio) / 4), 4)
+        # it should be a multiple of 4 minimum 4, and maximum nsamples-4.
+        # This value is ignored in fifo_single mode.  
+        posttrig = max(4 * round(nsamples * (1. - pretrig_ratio) / 4) - 4, 4)
+        posttrig = min(posttrig, nsamples-4)
         self.set64(sp.SPC_POSTTRIGGER, posttrig)
 
         if nsamples / samplerate > timeout:

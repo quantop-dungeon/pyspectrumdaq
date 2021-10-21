@@ -82,9 +82,7 @@ class Card:
         self._nsamples = 0  # The number of samples per channel per trace.
 
         self._pvBuffer = None  # A handle to a buffer for DMA data transfer.
-        self._buffer = None    # A handle to the same buffer as a numpy array.
-        self._nbufftraces = 0  # The size of the buffer in traces.
-        self._trace_nbytes = 0  # The size of one trace in bytes.
+        self._buffer = []  # The same buffer as a list of numpy array.
 
         # The factors for converting between ADC values and voltages
         # (for all channels, not the ones that are enabled).
@@ -388,11 +386,13 @@ class Card:
             raise RuntimeError("The card has to be configured for std_single "
                                "mode.")
 
+        trace_nbytes = self._buffer[0].nbytes
+
         # Defines DMA transfer with a notification when all data is received. 
         # This has to be done for every acquisition.
         err = sp.spcm_dwDefTransfer_i64(self._hCard, sp.SPCM_BUF_DATA,
                                         sp.SPCM_DIR_CARDTOPC, 0,
-                                        self._pvBuffer, 0, self._trace_nbytes)
+                                        self._pvBuffer, 0, trace_nbytes)
 
         if err != sp.ERR_OK:
             raise CardError(self.get_error_info())
@@ -408,10 +408,10 @@ class Card:
             cfs = tuple(self._conversions[n] for n in self._acq_channels)
             dim = (self._nsamples, len(self._acq_channels))
             data = np.zeros(dim, dtype=np.float64)
-            _convert(data, self._buffer, cfs)
+            _convert(data, self._buffer[0], cfs)
         else:
             # Takes a copy because the buffer can be overwritten by a next DMA.
-            data = self._buffer.copy()
+            data = self._buffer[0].copy()
 
         return data
 
@@ -437,20 +437,23 @@ class Card:
             raise RuntimeError("The card has to be configured for fifo_single "
                                "or fifo_multi mode.")
 
-        # Defines data transfer with a notification for every new trace.
-        buff_nbytes = self._nbufftraces * self._trace_nbytes
-        notify_nbytes = self._trace_nbytes
-        err = sp.spcm_dwDefTransfer_i64(self._hCard, sp.SPCM_BUF_DATA,
-                                        sp.SPCM_DIR_CARDTOPC, notify_nbytes,
-                                        self._pvBuffer, 0, buff_nbytes)
-
-        if err != sp.ERR_OK:
-            raise CardError(self.get_error_info())
-
         # Shorthand notations.
         ns = self._nsamples
         nchannels = len(self._acq_channels)
         cfs = tuple(self._conversions[n] for n in self._acq_channels)
+
+        nbufftraces = len(self._buffer)
+        trace_nbytes = self._buffer[0].nbytes
+
+        buff_nbytes = nbufftraces * trace_nbytes
+        notify_nbytes = trace_nbytes
+
+        # Defines data transfer with a notification for every new trace.
+        err = sp.spcm_dwDefTransfer_i64(self._hCard, sp.SPCM_BUF_DATA,
+                                        sp.SPCM_DIR_CARDTOPC, notify_nbytes,
+                                        self._pvBuffer, 0, buff_nbytes)
+        if err != sp.ERR_OK:
+            raise CardError(self.get_error_info())
 
         cnt = 0  # Init a trace counter.
 
@@ -461,18 +464,18 @@ class Card:
         self.set32(sp.SPC_M2CMD, start_cmd)
 
         while True:
-            i = cnt % self._nbufftraces  # The buffer segment counter.
+            i = cnt % nbufftraces  # The buffer segment counter.
 
             if convert:
                 # Converts the data to voltage readings.
                 data = np.zeros((ns, nchannels), dtype=np.float64)
-                _convert(data, self._buffer[i * ns: (i + 1) * ns, :], cfs)
+                _convert(data, self._buffer[i], cfs)
             else:
                 # Takes a copy because the buffer can be overwritten.
-                data = self._buffer[i * ns: (i + 1) * ns, :].copy()
+                data = self._buffer[i].copy()
 
             # Notifies that some space in the buffer is free for writing again.
-            self.set64(sp.SPC_DATA_AVAIL_CARD_LEN, self._trace_nbytes)
+            self.set64(sp.SPC_DATA_AVAIL_CARD_LEN, trace_nbytes)
 
             yield data
 
@@ -655,12 +658,12 @@ class Card:
             self._pvBuffer = sp.create_string_buffer(trace_nbytes * nbufftraces)
             print("Using a regular buffer.")
 
-        self._nbufftraces = nbufftraces
-        self._trace_nbytes = trace_nbytes
-
-        # Represents the buffer as a 2D numpy array.
-        self._buffer = np.ndarray((nbufftraces * nsamples, nchannels), 
-                                  dtype=np.int16, buffer=self._pvBuffer)
+        # Represents the buffer as a list of arrays each containing one trace.
+        self._buffer = [np.ndarray((nsamples, nchannels), 
+                                   dtype=np.int16, 
+                                   buffer=self._pvBuffer, 
+                                   offset=i * trace_nbytes) 
+                        for i in range(nbufftraces)]
 
 
 class CardError(Exception):

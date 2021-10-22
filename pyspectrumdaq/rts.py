@@ -17,119 +17,31 @@ import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore
 from pyqtgraph.Qt import QtGui
 
-from .rtsui import Ui_RtsWidget
+from rtsui import Ui_RtsWidget
 
-from .card import Card
-#from dummy_card import DummyCard as Card  #TODO: remove
+#from .card import Card
+from dummy_card import DummyCard as Card  #TODO: remove
+
 
 TDSF = 100  # The shrinking factor for time-domain data.
+COMM_POLL_INTVL = 0.5  # (seconds)
+RT_NOTIF_INTVL = 15  # (seconds)
 
-def daq(settings: dict, conn, buff, buff_acc, buff_t, cnt, navg, navg_completed) -> None:
-    """ Starts continuous data streaming from the card. """
 
-    navg_rt = settings.pop("naverages_rt")
-    trig_mode = settings.pop("trig_mode")
+def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_completed) -> None:
+    """ Starts continuous data streaming from the card. 
+    """
+    init = True
 
-    adc = Card()
+    with Card(*card_args) as adc:    
+        while True:
+            msg = conn.recv()
 
-    # TODO: set clock mode before setting acquisition.
-    adc.set_acquisition(**settings)
-    adc.set_trigger(trig_mode)
+            # The message can be a request to stop or new settings.
+            if msg == "stop":
+                cnt.value = 0
+                break
 
-    conn.send({"samplerate": adc.samplerate, "nsamples": adc.nsamples})
-
-    nf = adc.nsamples // 2 + 1  # The number of frequency bins.
-    nst = adc.nsamples // TDSF  # The number of samples in the time-domain trace.
-
-    npbuff = [np.ndarray((nf,), dtype=np.float64, buffer=a.get_obj()) for a in buff]
-    npbuff_acc = np.ndarray((nf,), dtype=np.float64, buffer=buff_acc)
-    npbuff_t = [np.ndarray((nst,), dtype=np.float64, buffer=a) for a in buff_t]
-    
-    nbuff = len(buff)  # The size of the interprocess buffer in traces.
-
-    # Auxiliary arrays for the calcualtion of FFT.
-    a = pyfftw.empty_aligned(2 * (nf - 1), dtype="float64")
-    b = pyfftw.empty_aligned(nf, dtype="complex128")
-    
-    calc_fft = pyfftw.FFTW(a, b, flags=["FFTW_ESTIMATE"])
-    # Using FFTW_ESTIMATE flag significantly reduces startup time at 
-    # the expense of a less than 5 % reduction in speed according to the tests.
-    
-    y = np.zeros(nf, dtype=np.float64)  # A buffer to store abs spectrum squared.
-
-    while True:
-        j = 0  # The fast accumulation counter.
-
-        cnt.value = 0  # The number of acquired traces is this value times TODO: divided by navg_rt
-        navg_completed.value = 0
-
-        dt_trace = adc.nsamples / adc.samplerate  # The duration of one trace (seconds).
-        dt_not = 15  # Notification interval (seconds).  TODO: Make this a global variable?
-
-        n_slow_update = max(int(0.5 / dt_trace / navg_rt), 1)
-
-        start_time = time()
-        prev_not_time = start_time
-
-        for data in adc.fifo():
-            a[:] = data[:, 0]
-            calc_fft()
-            calc_abs_square(y, b)
-            # Now there is a new absolute squared FFT result stored in y.
-
-            # Adds the trace to the accumulator buffer, which is independent of the fast averaging.
-            if navg_completed.value < navg.value:
-                if navg_completed.value == 0:
-                    npbuff_acc[:] = y
-                else:
-                    add_array(npbuff_acc, y)
-
-                navg_completed.value += 1
-
-            i = (cnt.value % nbuff)   # The index inside the real-time buffer.
-
-            if j == 0:
-                buff[i].acquire()
-                npbuff[i][:] = y
-            else:
-                add_array(npbuff[i], y)
-
-            j += 1
-
-            if j == navg_rt:
-
-                # Updates the time domain data.
-                npbuff_t[i][:] = data[: nst, 0]
-
-                # Releases the buffer lock so that the new spectrum and time
-                # domain data can be read by the ui process.
-                buff[i].release()
-
-                cnt.value += 1
-
-                j = 0  # Resets the fast averaging counter.
-
-                if cnt.value % n_slow_update == 0:
-                    now = time()
-                    delay = (now - start_time) - navg_rt * cnt.value * dt_trace
-
-                    if delay > 0 and (now - prev_not_time) > dt_not:
-                        # Prints how far it is from real-time prformance.
-                        print(f"The data reading is behind real time by (s): {delay}")
-                        prev_not_time = now
-
-                    # The conncetion breaks if polled too frequently.
-                    if conn.poll():
-                        break
-
-        msg = conn.recv()
-
-        # The message can be of only two kinds, a request to stop and a settings update.
-        if msg == "stop":
-            adc.close()
-            cnt.value = 0
-            break
-        else:
             settings = msg
 
             navg_rt = settings.pop("naverages_rt")
@@ -143,12 +55,102 @@ def daq(settings: dict, conn, buff, buff_acc, buff_t, cnt, navg, navg_completed)
 
             conn.send({"samplerate": adc.samplerate, "nsamples": adc.nsamples})
 
+            nf = adc.nsamples // 2 + 1  # The number of frequency bins.
+            nst = adc.nsamples // TDSF  # The number of samples in the time-domain trace.
+
+            if init:
+                npbuff = [np.ndarray((nf,), dtype=np.float64, buffer=a.get_obj()) for a in buff]
+                npbuff_acc = np.ndarray((nf,), dtype=np.float64, buffer=buff_acc)
+                npbuff_t = [np.ndarray((nst,), dtype=np.float64, buffer=a) for a in buff_t]
+                
+                nbuff = len(buff)  # The size of the interprocess buffer in traces.
+
+                # Auxiliary arrays for the calcualtion of FFT.
+                a = pyfftw.empty_aligned(2 * (nf - 1), dtype="float64")
+                b = pyfftw.empty_aligned(nf, dtype="complex128")
+                
+                calc_fft = pyfftw.FFTW(a, b, flags=["FFTW_ESTIMATE"])
+                # Using FFTW_ESTIMATE flag significantly reduces startup time at 
+                # the expense of a less than 5 % reduction in speed according to the tests.
+                
+                y = np.zeros(nf, dtype=np.float64)  # A buffer to store abs spectrum squared.
+
+                init = False
+
+            j = 0  # The fast accumulation counter.
+            cnt.value = 0  # The number of acquired traces TODO: divided by navg_rt
+            navg_completed.value = 0
+
+            # The duration of one trace (seconds).
+            dt_trace = adc.nsamples / adc.samplerate
+
+            n_slow_update = max(int(COMM_POLL_INTVL / dt_trace / navg_rt), 1)
+
+            start_time = time()
+            prev_not_time = start_time
+
+            for data in adc.fifo():
+                a[:] = data[:, 0]
+                calc_fft()
+                calc_abs_square(y, b)
+                # Now there is a new absolute squared FFT result stored in y.
+
+                # Adds the trace to the accumulator buffer, which is independent of the fast averaging.
+                if navg_completed.value < navg.value:
+                    if navg_completed.value == 0:
+                        npbuff_acc[:] = y
+                    else:
+                        add_array(npbuff_acc, y)
+
+                    navg_completed.value += 1
+
+                i = (cnt.value % nbuff)   # The index inside the real-time buffer.
+
+                if j == 0:
+                    buff[i].acquire()
+                    npbuff[i][:] = y
+                else:
+                    add_array(npbuff[i], y)
+
+                j += 1
+
+                if j == navg_rt:
+
+                    # Updates the time domain data.
+                    npbuff_t[i][:] = data[: nst, 0]
+
+                    # Releases the buffer lock so that the new spectrum and time
+                    # domain data can be read by the ui process.
+                    buff[i].release()
+
+                    cnt.value += 1
+
+                    j = 0  # Resets the fast averaging counter.
+
+                    if cnt.value % n_slow_update == 0:
+                        now = time()
+                        delay = (now - start_time) - navg_rt * cnt.value * dt_trace
+
+                        if delay > 0 and (now - prev_not_time) > RT_NOTIF_INTVL:
+                            # Prints how far it is from real-time prformance.
+                            print(f"The data reading is behind real time by (s): {delay}")
+                            prev_not_time = now
+
+                        # The conncetion breaks if polled too frequently.
+                        if conn.poll():
+                            break
+
 
 class RtsWindow(QtGui.QMainWindow):
 
-    def __init__(self, card_settings: Union[dict, None] = None) -> None:
+    def __init__(self, card_address: str = "", card_settings: Union[dict, None] = None) -> None:
         super().__init__()
         self.createUi()
+
+        if card_address:
+            self.card_args = [card_address]
+        else:
+            self.card_args = []
 
         self.lbuff = 20  # The number of traces in the interprocess buffer.
         self.max_disp_samplerate = 3 * 10**6  # Maximum display rate of data in samples per second
@@ -158,7 +160,6 @@ class RtsWindow(QtGui.QMainWindow):
         self.navg_disp = 10  # TODO: remove this in the future and let the daq process do the normalization.
 
         self.daq_proc = None  # A reference to the data acquisition process.
-        self.current_settings = None  # The settings of the process.
 
         # Shared variables for interprocess communication.
         self.navg = Value("i", 0, lock=False)
@@ -191,36 +192,33 @@ class RtsWindow(QtGui.QMainWindow):
         self.line_td.setPen((126, 47, 142))
 
         # TODO: read the parameters below from the card.
-        self.card_fullranges_mv = [10000, 10000, 10000, 10000]
+        self.card_fullranges_mv = [10000, 10000, 10000, 10000]  # TODO: read the number of channels from the card.
         self.card_terminations = ["1M", "1M", "1M", "1M"]
         # Other card settings are stored in UI controls, but these have
         # dedicated attributes because only one channel is displayed in UI
         # at a time.
+        
+        # Default settings.
+        self.current_settings = {"mode": "fifo_single",
+                                 "channels": (0,),
+                                 "fullranges": (10,),
+                                 "terminations": ("1M",),
+                                 "samplerate": 30e6,
+                                 "nsamples": 409600,
+                                 "trig_mode": "soft",
+                                 "naverages_rt": 10}
 
-        if not card_settings:
+        if card_settings:
+            self.current_settings.update(card_settings)
 
-            # Use default settings.
-            card_settings = {"mode": "fifo_single",
-                             "channels": (0,),
-                             "fullranges": (10,),
-                             "terminations": ("1M",),
-                             "samplerate": 30e6,
-                             "nsamples": 409600,
-                             "trig_mode": "soft",
-                             "naverages_rt": 10}
-
-            self.user_settings = {}
-        else:
-            self.user_settings = card_settings
-
-        self.set_settings_to_ui(card_settings)
+        self.display_current_settings()
 
         self.xfd = None
         self.yfd_ref = None
         self.xtd = None
 
         # Creates a timer that will start a data acquisition process once the app is running.
-        QtCore.QTimer.singleShot(10, self.start_daq) 
+        QtCore.QTimer.singleShot(10, self.update_daq) 
 
         # Starts a timer that will periodically update the ui and the plots.
         self.updateTimer = QtCore.QTimer()
@@ -239,15 +237,21 @@ class RtsWindow(QtGui.QMainWindow):
         self.setCentralWidget(self.ui)
 
         # Connects the control panel.
-        self.ui.channelComboBox.currentIndexChanged.connect(self.on_channel_change)
+        
+        self.ui.channelComboBox.currentIndexChanged.connect(
+            self.on_channel_change
+        )
+        self.ui.fullrangeComboBox.currentIndexChanged.connect(
+            self.on_channel_param_change
+        )
+        self.ui.terminationComboBox.currentIndexChanged.connect(
+            self.on_channel_param_change
+        )
 
-        self.ui.fullrangeComboBox.currentIndexChanged.connect(self.on_channel_param_change)
-        self.ui.terminationComboBox.currentIndexChanged.connect(self.on_channel_param_change)
+        self.ui.trigmodeComboBox.currentIndexChanged.connect(self.update_daq)
 
-        self.ui.trigmodeComboBox.currentIndexChanged.connect(self.update_daq_settings)
-
-        self.ui.samplerateLineEdit.editingFinished.connect(self.update_daq_settings)
-        self.ui.nsamplesLineEdit.editingFinished.connect(self.start_daq)
+        self.ui.samplerateLineEdit.editingFinished.connect(self.update_daq)
+        self.ui.nsamplesLineEdit.editingFinished.connect(self.update_daq)
 
         self.ui.averagePushButton.clicked.connect(self.start_averaging)
         self.ui.naveragesLineEdit.editingFinished.connect(self.set_navg)
@@ -299,155 +303,103 @@ class RtsWindow(QtGui.QMainWindow):
                 # Displays the reference trace.
                 self.line_ref.setData(self.xfd, self.yfd_ref)
 
-    def start_daq(self):
+    def update_daq(self) -> None:
         """Starts data acquisition in a separate process with present settings.
         """
 
         settings = self.get_settings_from_ui()
 
-        if settings == self.current_settings:
+        if self.daq_proc and settings == self.current_settings:
             # Sometimes ui elements fire signals that call this function even
             # if there has been no actual change in the card settings.
             # Such calls are discarded.
             return
 
-        #self.user_settings.update(settings)  # TODO: Adds extra user settings.
-
         self.r_cnt = 0
         self.show_overflow = True
         self.averging_now = False
 
-        if self.daq_proc and self.daq_proc.is_alive():
-            self.stop_daq()  # Terminates the existing daq process.
+        # Checks if there is a need to create a new process.
+        new_proc = (not self.daq_proc or 
+                    (settings["nsamples"] != self.current_settings["nsamples"]))
 
-        # Before starting a new daq process, a buffer needs to be allocated for
-        # interprocess communication, for which we need the number of samples. 
-        # 2048 samples is the trace rounding margin.
-        ns_est = settings["nsamples"] + 2048 
-        nf_est = ns_est // 2 + 1  
+        if new_proc:
+            print(4)
 
-        # Allocates bufferst that will be shared between the processes.
-        # The frequency-domain buffers are completely responsible for synchronization, all other
-        # shared buffers do not have their own locks.
-        self.buff = [Array("d", nf_est, lock=True) for _ in range(self.lbuff)]
-        self.buff_acc = Array("d", nf_est, lock=False)
-        self.buff_t = [Array("d", ns_est // TDSF, lock=False) 
-                       for _ in range(self.lbuff)]
+            if self.daq_proc and self.daq_proc.is_alive():
+                self.stop_daq()
 
-        conn1, conn2 = Pipe()
-        self.pipe_conn = conn1
+            # Before starting a new process, a buffer needs to be allocated for
+            # interprocess communication, for which we need the number of samples. 
+            # 2048 samples is the trace rounding margin.
+            ns_est = settings["nsamples"] + 2048 
+            nf_est = ns_est // 2 + 1  
 
-        # Signature: daq(settings, conn, buff, buff_acc, buff_t, ind, navg, avg_completed)
-        self.daq_proc = Process(target=daq,
-                                args=(settings, conn2, self.buff, self.buff_acc, self.buff_t,
-                                      self.w_cnt, self.navg, self.navg_completed),
-                                daemon=True)
-        self.daq_proc.start()
+            # Allocates bufferst that will be shared between the processes.
+            # The frequency-domain buffers are completely responsible for synchronization, all other
+            # shared buffers do not have their own locks.
+            self.buff = [Array("d", nf_est, lock=True) for _ in range(self.lbuff)]
+            self.buff_acc = Array("d", nf_est, lock=False)
+            self.buff_t = [Array("d", ns_est // TDSF, lock=False) 
+                           for _ in range(self.lbuff)]
+
+            self.pipe_conn, conn2 = Pipe()
+
+            self.daq_proc = Process(target=daq_loop,
+                                    args=(self.card_args, conn2, 
+                                          self.buff, self.buff_acc, self.buff_t, 
+                                          self.w_cnt, self.navg, 
+                                          self.navg_completed),
+                                    daemon=True)
+            self.daq_proc.start()
+
+        # Sends new settings.
+        self.pipe_conn.send(settings)
 
         # Gets the true sampling rate and the trace size from the card.
         msg = self.pipe_conn.recv()
+
         sr = msg["samplerate"]
         ns = msg["nsamples"]
+
+        settings.update(msg)
+        self.current_settings = settings
 
         nf = ns // 2 + 1  # The number of frequency bins.
         nst = ns // TDSF  # The number of samples in the time-domain trace.
 
-        self.npbuff = [np.ndarray((nf,), dtype=np.float64, buffer=a.get_obj())
-                       for a in self.buff]
-        self.npbuff_acc = np.ndarray((nf,), dtype=np.float64, 
-                                     buffer=self.buff_acc)
-        self.npbuff_t = [np.ndarray((nst,), dtype=np.float64, buffer=a) 
-                         for a in self.buff_t]
+        if new_proc:
+            # Formats the interprocess buffers based on the actual number of samples if a trace.
+            self.npbuff = [np.ndarray((nf,), dtype=np.float64, buffer=a.get_obj())
+                           for a in self.buff]
+            self.npbuff_acc = np.ndarray((nf,), dtype=np.float64, 
+                                         buffer=self.buff_acc)
+            self.npbuff_t = [np.ndarray((nst,), dtype=np.float64, buffer=a) 
+                            for a in self.buff_t]
 
         with NoSignals(self.ui.samplerateLineEdit) as uielem:
             uielem.setText("%i" % sr)
         with NoSignals(self.ui.nsamplesLineEdit) as uielem:
             uielem.setText("%i" % ns)
 
-         # Inits the x axis and the plot.
+         # Calculates the x axis and the spectrum plot.
         self.xfd = fftfreq(ns + 1, 1/sr)[0: nf]  # TODO: check this, the frequencies are probably off.
 
         # Setting x and y ranges removes autoadjustment.
         self.ui.plotWidget.setXRange(self.xfd[0], self.xfd[-1])
-        self.ui.plotWidget.setYRange(1e-20, 10)
+        self.ui.plotWidget.setYRange(-1, 10)
         
         rng = settings["fullranges"][0] 
-
+        self.xtd = np.linspace(0, nst / sr, nst)
         self.ui.scopePlot.setXRange(0, nst / sr)
         self.ui.scopePlot.setYRange(-rng, rng)
 
-        self.xtd = np.linspace(0, nst / sr, nst)
+    def stop_daq(self) -> None:
+        """Terminates the existing process."""
 
-        settings.update(msg)
-        self.current_settings = settings
-
-
-    def stop_daq(self):
-
-        # Tells the daq process to finish, waits until it does, and resets the flag.
-        self.pipe_conn.send("stop")
-        self.daq_proc.join()
-
-        # del self.pipe_conn
-
-        # del self.buff[:]  # TODO: Is it really necessary to explicitly detelete this ?
-        # del self.npbuff[:]
-
-        # del self.buff_acc
-        # del self.npbuff_acc
-
-        # del self.buff_t[:]
-        # del self.npbuff_t[:]
-        
-    def update_daq_settings(self):
-        settings = self.get_settings_from_ui()
-
-        if settings == self.current_settings:
-            return
-
-        # self.user_settings.update(settings)  # Adds extra user settings.
-
-        self.r_cnt = 0
-        self.averging_now = False
-
-        self.pipe_conn.send(settings)
-
-        # Resets the counters.
-        self.r_cnt = 0
-        self.show_overflow = True
-        self.averging_now = False
-
-        # Receives new settings from the card.
-        msg = self.pipe_conn.recv()
-        
-        ns = msg["nsamples"]
-        sr = msg["samplerate"]
-
-        if ns != settings["nsamples"]:
-            raise RuntimeError("The number of samples must not be changed here.")  # TODO: make a better comment.
-
-        with NoSignals(self.ui.samplerateLineEdit) as uielem:
-            uielem.setText("%i" % sr)
-
-        nf = ns // 2 + 1  # The number of frequency bins.
-        nst = ns // TDSF  # The number of samples in the time-domain trace.
-
-        # Inits the x axis and the plot.
-        self.xfd = fftfreq(ns + 1, 1/sr)[0: nf]  # TODO: check this, the frequencies are probably off.
-
-        # Setting x and y ranges removes autoadjustment.
-        self.ui.plotWidget.setXRange(self.xfd[0], self.xfd[-1])
-        self.ui.plotWidget.setYRange(1e-20, 10)
-        
-        rng = settings["fullranges"][0] 
-
-        self.ui.scopePlot.setXRange(0, nst / sr)
-        self.ui.scopePlot.setYRange(-rng, rng)
-
-        self.xtd = np.linspace(0, nst / sr, nst)
-
-        settings.update(msg)
-        self.current_settings = settings
+        if self.pipe_conn and self.daq_proc:
+            self.pipe_conn.send("stop")
+            self.daq_proc.join()
 
     def start_averaging(self):
         self.set_navg()
@@ -457,7 +409,8 @@ class RtsWindow(QtGui.QMainWindow):
         self.navg_completed.value = 0
 
     def get_settings_from_ui(self) -> dict:
-        """Gets card settings from the user interface."""
+        """ Gets card settings from the user interface. 
+        """
 
         # TODO: keep the total trace length above 10 us
         # Keep the total flux of points to display below 3 Ms/sec.
@@ -477,38 +430,40 @@ class RtsWindow(QtGui.QMainWindow):
         nsamples = int(float(self.ui.nsamplesLineEdit.text()))
 
         navg_rt = ceil(samplerate / self.max_disp_samplerate)
-
-        settings = {"mode": card_mode,
-                    "channels": (ch,),
-                    "fullranges": (frng,),
-                    "terminations": (term,),
-                    "samplerate": samplerate,
-                    "nsamples": nsamples,
-                    "trig_mode": trig_mode,
-                    "naverages_rt": navg_rt}
-
         self.navg_disp = navg_rt
 
-        # The number of traces averaged before display.
+        # Copies the existing settings to preserve user-supplied values.
+        new_settings = self.current_settings.copy()
+
+        new_settings.update({"mode": card_mode,
+                             "channels": (ch,),
+                             "fullranges": (frng,),
+                             "terminations": (term,),
+                             "samplerate": samplerate,
+                             "nsamples": nsamples,
+                             "trig_mode": trig_mode,
+                             "naverages_rt": navg_rt})
+
+        # The number of traces averaged before display. TODO: remove and display in
         print(f"Averaging over {self.navg_disp} traces")
 
-        return settings
+        return new_settings
 
-    def set_settings_to_ui(self, settings: dict) -> None:
+    def display_current_settings(self) -> None:
         """Displays card settings in the user interface."""
 
         with NoSignals(self.ui.samplerateLineEdit) as uielem:
-            uielem.setText("%i" % settings["samplerate"])
+            uielem.setText("%i" % self.current_settings["samplerate"])
 
         with NoSignals(self.ui.nsamplesLineEdit) as uielem:
-            uielem.setText("%i" % settings["nsamples"])
+            uielem.setText("%i" % self.current_settings["nsamples"])
 
         with NoSignals(self.ui.channelComboBox) as uielem:
-            ch = settings["channels"][0]
+            ch = self.current_settings["channels"][0]
             uielem.setCurrentIndex(ch)
 
         with NoSignals(self.ui.fullrangeComboBox) as uielem:
-            fr_mv = int(1000 * settings["fullranges"][0])   # Full range in mV.
+            fr_mv = int(1000 * self.current_settings["fullranges"][0])   # Full range in mV.
 
             ind = uielem.findData(fr_mv) 
             uielem.setCurrentIndex(ind)
@@ -516,7 +471,7 @@ class RtsWindow(QtGui.QMainWindow):
             self.card_fullranges_mv[ch] = fr_mv
 
         with NoSignals(self.ui.terminationComboBox) as uielem:
-            term = settings["terminations"][0]
+            term = self.current_settings["terminations"][0]
 
             ind = uielem.findData(term)
             uielem.setCurrentIndex(ind)
@@ -524,7 +479,7 @@ class RtsWindow(QtGui.QMainWindow):
             self.card_terminations[ch] = term
 
         with NoSignals(self.ui.trigmodeComboBox) as uielem:
-            ind = uielem.findData(settings["trig_mode"])
+            ind = uielem.findData(self.current_settings["trig_mode"])
             uielem.setCurrentIndex(ind)
 
     def on_channel_change(self):
@@ -538,7 +493,7 @@ class RtsWindow(QtGui.QMainWindow):
             ind = uielem.findData(self.card_terminations[ch])
             uielem.setCurrentIndex(ind)
 
-        self.update_daq_settings()
+        self.update_daq()
 
     def on_channel_param_change(self):
         ch = self.ui.channelComboBox.currentData()
@@ -546,7 +501,7 @@ class RtsWindow(QtGui.QMainWindow):
         self.card_fullranges_mv[ch] = self.ui.fullrangeComboBox.currentData()
         self.card_terminations[ch] = self.ui.terminationComboBox.currentData()
 
-        self.update_daq_settings()
+        self.update_daq()
 
     def set_navg(self):
         navg = int(self.ui.naveragesLineEdit.text())
@@ -570,7 +525,7 @@ class RtsWidget(QtGui.QWidget, Ui_RtsWidget):
         self.terminationComboBox.addItem("1 MOhm", "1M")
         self.terminationComboBox.addItem("50 Ohm", "50")
 
-        with Card() as adc:
+        with Card() as adc:  # TODO: move this to the main window.
             nchannels = adc._nchannels
             valid_fullranges_mv = adc._valid_fullranges_mv
 

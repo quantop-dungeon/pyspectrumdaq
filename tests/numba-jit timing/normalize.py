@@ -1,26 +1,37 @@
 
 # Representative results obtained with numba 0.53.1 and numpy 1.21.2 (2021-10):
 #
+# ns = 2*10**7
+# nit = 100
+# a = 10
+#
+# Numba-jit-serial total time (s): 9.467210054397583
+# Numba-jit-parallel total time (s): 2.2950005531311035
+# Numba-jit-serial-mem-alloc total time (s): 9.976002931594849
+# Numba-jit-parallel-mem-alloc total time (s): 3.292997360229492
+# Numpy total time (s): 5.253016233444214
+#
+#
 # ns = 2*10**5
 # nit = 10000
 # a = 10
 #
-# Numba-jit-serial total time (s): 5.130236864089966
-# Numba-jit-parallel total time (s): 1.2612504959106445
-# Numba-jit-serial-mem-alloc total time (s): 4.855409622192383
-# Numba-jit-parallel-mem-alloc total time (s): 1.2957305908203125
-# Numpy total time (s): 6.774352788925171
+# Numba-jit-serial total time (s): 6.008684396743774
+# Numba-jit-parallel total time (s): 1.3093721866607666
+# Numba-jit-serial-mem-alloc total time (s): 5.40458345413208
+# Numba-jit-parallel-mem-alloc total time (s): 1.3021554946899414
+# Numpy total time (s): 2.99794602394104
 #
 #
 # ns = 2*10**3
 # nit = 100000
 # a = 10
 #
-# Numba-jit-serial total time (s): 0.6369800567626953
-# Numba-jit-parallel total time (s): 11.904999256134033
-# Numba-jit-serial-mem-alloc total time (s): 0.6759977340698242
-# Numba-jit-parallel-mem-alloc total time (s): 10.418000936508179
-# Numpy total time (s): 0.47800302505493164
+# Numba-jit-serial total time (s): 0.8348808288574219
+# Numba-jit-parallel total time (s): 9.871706485748291
+# Numba-jit-serial-mem-alloc total time (s): 0.6763503551483154
+# Numba-jit-parallel-mem-alloc total time (s): 9.235614538192749
+# Numpy total time (s): 0.5091900825500488
 
 import time
 
@@ -58,8 +69,8 @@ def _normalize2p(dst, src, a):
         dst[i] = src[i] / a
 
 
-ns = 2*10**5
-nit = 10000
+ns = 2*10**7
+nit = 100
 a = 10
 
 
@@ -104,6 +115,6 @@ print(f"Numba-jit-parallel-mem-alloc total time (s): {endt-startt}")
 
 startt = time.time()
 for i in range(nit):
-    src = src / a
+    np.divide(src, a, out=src)
 endt = time.time()
 print(f"Numpy total time (s): {endt-startt}")

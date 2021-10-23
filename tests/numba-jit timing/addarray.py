@@ -26,26 +26,24 @@ import time
 import numpy as np
 import numba
 
-from numba.types import float64, CPointer, void, intp, int32
-
 
 @numba.jit(nopython=True)
 def _addarr(dst, src):
     """Serial version"""
     for i in range(dst.shape[0]):
-        dst[i] = dst[i] + src[i, 0]
+        dst[i] = dst[i] + src[i]
 
 
 @numba.jit(nopython=True, parallel=True)
 def _addarrp(dst, src):
     """Parallel version"""
     for i in numba.prange(dst.shape[0]):
-        dst[i] = dst[i] + src[i, 0]
+        dst[i] = dst[i] + src[i]
 
 ns = 2*10**5
 nit = 10000
 
-src = np.random.random((ns, 1))
+src = np.random.random((ns,))
 dst = np.zeros(ns, dtype=np.float64)
 
 # Call the functions once before timing to trigger their compilation.
@@ -68,12 +66,12 @@ print(f"Numba-jit-parallel total time: {endt-startt}")
 
 startt = time.time()
 for i in range(nit):
-    dst[:] = dst + src[:, 0]
+    dst = dst + src
 endt = time.time()
-print(f"Numpy total time: {endt-startt}")
+print(f"Numpy + total time: {endt-startt}")
 
 
 for i in range(nit):
-    np.add(dst, src[:, 0], out=dst)
+    np.add(dst, src, out=dst)
 endt = time.time()
 print(f"Numpy-add total time: {endt-startt}")

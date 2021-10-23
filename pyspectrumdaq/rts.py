@@ -10,8 +10,11 @@ from multiprocessing import Pipe
 import numpy as np
 from numpy.fft import fftfreq  # TODO: replace this with manual calculation
 
-import numba
-import pyfftw
+from numba import njit
+from numba import prange
+
+from pyfftw import FFTW
+from pyfftw import empty_aligned
 
 import pyqtgraph as pg
 from pyqtgraph.Qt import QtCore
@@ -66,10 +69,10 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
                 nbuff = len(buff)  # The size of the interprocess buffer in traces.
 
                 # Auxiliary arrays for the calcualtion of FFT.
-                a = pyfftw.empty_aligned(2 * (nf - 1), dtype="float64")
-                b = pyfftw.empty_aligned(nf, dtype="complex128")
+                a = empty_aligned(2 * (nf - 1), dtype="float64")
+                b = empty_aligned(nf, dtype="complex128")
                 
-                calc_fft = pyfftw.FFTW(a, b, flags=["FFTW_ESTIMATE"])
+                calc_fft = FFTW(a, b, flags=["FFTW_ESTIMATE"])
                 # Using FFTW_ESTIMATE flag significantly reduces startup time at 
                 # the expense of a less than 5 % reduction in speed according to the tests.
                 
@@ -125,7 +128,7 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
                     # Normalizes the data and releases the lock so that 
                     # the new spectrum and the time domain data can be read 
                     # by the ui process.
-                    divide_array(npbuff[i], navg_rt)
+                    np.divide(npbuff[i], navg_rt, out=npbuff[i])
                     buff[i].release()
 
                     cnt.value += 1
@@ -344,10 +347,8 @@ class RtsWindow(QtGui.QMainWindow):
             if navg_compl >= self.navg.value:
                 self.averging_now = False
 
-                self.yfd_ref = self.npbuff_acc.copy()
-                divide_array(self.yfd_ref, navg_compl)
-
-                # Displays the reference trace.
+                # Acquires and displays a new reference trace.
+                self.yfd_ref = self.npbuff_acc / navg_compl
                 self.line_ref.setData(self.xfd, self.yfd_ref)
 
     def update_daq(self) -> None:
@@ -592,36 +593,54 @@ class NoSignals:
         self.uielement.blockSignals(False)
 
 
-@numba.jit(nopython=True, parallel=True)
 def add_array(a, b):
     """a = a + b 
 
     Adds two 1D arrays `b` and `a` element-wise and stores the result in `a`.
     """
-    for i in numba.prange(a.shape[0]):
+    if a.shape[0] > 1e5:
+        add_array_parallel(a, b)
+    else:
+        add_array_serial(a, b)
+
+
+@njit
+def add_array_serial(a, b):
+    """The serial implementation of add_array."""
+    for i in range(a.shape[0]):
         a[i] = a[i] + b[i]
 
 
-@numba.jit(nopython=True, parallel=True)
+@njit(parallel=True)
+def add_array_parallel(a, b):
+    """The parallel implementation of add_array."""
+    for i in prange(a.shape[0]):
+        a[i] = a[i] + b[i]
+
+
 def calc_abs_square(a, b):
     """a = abs(b * b)
 
     Calculates absolute squares of the elements of a 1D array `b` and stores 
     the result in `a`.
     """
-    for i in numba.prange(a.shape[0]):
+    if a.shape[0] > 1e5:
+        calc_abs_square_parallel(a, b)
+    else:
+        calc_abs_square_serial(a, b)
+
+@njit
+def calc_abs_square_serial(a, b):
+    """The serial implementation of calc_abs_square."""
+    for i in range(a.shape[0]):
         a[i] = abs(b[i] * b[i])
 
 
-@numba.jit(nopython=True, parallel=True)
-def divide_array(a, c):
-    """a = a / c 
-
-    Divides the elements of a 1D array `a` by a constant factor `c` and stores 
-    the result in `a`.
-    """
-    for i in numba.prange(a.shape[0]):
-        a[i] = a[i] / c
+@njit(parallel=True)
+def calc_abs_square_parallel(a, b):
+    """The parallel implementation of calc_abs_square."""
+    for i in prange(a.shape[0]):
+        a[i] = abs(b[i] * b[i])
 
 
 

@@ -716,7 +716,6 @@ def szTypeToName(lCardType: int) -> str:
     return name
 
 
-@numba.jit(nopython=True, parallel=True)
 def _convert(dst, src, scalefs):
     """Converts a 2D integer numpy array (nsamples, nchanels) into a 2D float64 
     numpy array using the specified scaling factors for the channels. 
@@ -727,6 +726,24 @@ def _convert(dst, src, scalefs):
         src: Source array.
         scalefs: A list of scaling factors for the channels.
     """
+
+    if dst.shape[1] > 1 and dst.shape[0] > 1e5:
+        _convert_parallel(dst, src, scalefs)
+    else:
+        _convert_serial(dst, src, scalefs)
+
+
+@numba.njit
+def _convert_serial(dst, src, scalefs):
+    """The serial implementation of _convert."""
+    for ch in range(dst.shape[1]):
+        for n in range(dst.shape[0]):
+            dst[n, ch] = src[n, ch] * scalefs[ch]
+
+
+@numba.njit(parallel=True)
+def _convert_parallel(dst, src, scalefs):
+    """The parallel implementation of _convert."""
     for ch in numba.prange(dst.shape[1]):
-        for n in numba.prange(dst.shape[0]):
+        for n in range(dst.shape[0]):
             dst[n, ch] = src[n, ch] * scalefs[ch]

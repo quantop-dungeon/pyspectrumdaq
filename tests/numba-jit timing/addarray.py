@@ -11,6 +11,15 @@
 # Numba-jit-parallel total time: 0.8450229167938232
 # Numpy total time: 9.185407638549805
 # Numpy-add total time: 10.321401834487915
+#
+#
+# ns = 2*10**3
+# nit = 100000
+#
+# Numba-jit-serial total time: 0.15299582481384277
+# Numba-jit-parallel total time: 11.336984395980835
+# Numpy total time: 0.5420162677764893
+# Numpy-add total time: 0.816011905670166
 
 import time
 

@@ -9,6 +9,15 @@
 # Numpy-multiply total time (s): 1.5395128726959229
 #
 #
+# Single-channel, a small trace
+# ns = 2*10**3
+# nch = 1
+# nit = 100000
+# Numba-jit-serial total time (s): 0.16500210762023926
+# Numba-jit-parallel total time (s): 9.998680353164673
+# Numpy-multiply total time (s): 0.28800177574157715
+#
+#
 # 2 channels:
 # ns = 10**6
 # nch = 2

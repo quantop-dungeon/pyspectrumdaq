@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Union, Sequence
 from time import time
 from math import ceil
 
@@ -147,14 +147,25 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
 
 class RtsWindow(QtGui.QMainWindow):
 
-    def __init__(self, card_address: str = "", card_settings: Union[dict, None] = None) -> None:
+    def __init__(self, card_args: Sequence = (), acq_settings: Union[dict, None] = None) -> None:
         super().__init__()
-        self.createUi()
 
-        if card_address:
-            self.card_args = [card_address]
-        else:
-            self.card_args = []
+        defaults = {"mode": "fifo_single",
+                    "channels": (0,),
+                    "fullranges": (10,),
+                    "terminations": ("1M",),
+                    "samplerate": 30e6,
+                    "nsamples": 409600,
+                    "trig_mode": "soft",
+                    "naverages_rt": 10}
+
+        if acq_settings:
+            defaults.update(acq_settings)
+
+        self.setup_ui(card_args, defaults)
+
+        self.card_args = card_args
+        self.current_settings = defaults
 
         self.lbuff = 20  # The number of traces in the interprocess buffer.
         self.max_disp_samplerate = 3 * 10**6  # Maximum display rate of data in samples per second
@@ -183,51 +194,21 @@ class RtsWindow(QtGui.QMainWindow):
         self.show_overflow = True
         self.averging_now = False
 
-        self.line = self.ui.plotWidget.plot()  # Real-time trace display.
-        self.line.setPen((250, 0, 0))
-
-        self.line_ref = self.ui.plotWidget.plot()  # Reference trace display.
-        self.line_ref.setPen((20, 20, 20))
-
-        self.line_td = self.ui.scopePlot.plot()  # Time domain display.
-        self.line_td.setPen((126, 47, 142))
-
-        # TODO: read the parameters below from the card.
-        self.card_fullranges_mv = [10000, 10000, 10000, 10000]  # TODO: read the number of channels from the card.
-        self.card_terminations = ["1M", "1M", "1M", "1M"]
-        # Other card settings are stored in UI controls, but these have
-        # dedicated attributes because only one channel is displayed in UI
-        # at a time.
-        
-        # Default settings.
-        self.current_settings = {"mode": "fifo_single",
-                                 "channels": (0,),
-                                 "fullranges": (10,),
-                                 "terminations": ("1M",),
-                                 "samplerate": 30e6,
-                                 "nsamples": 409600,
-                                 "trig_mode": "soft",
-                                 "naverages_rt": 10}
-
-        if card_settings:
-            self.current_settings.update(card_settings)
-
-        self.display_current_settings()
-
         self.xfd = None
         self.yfd_ref = None
         self.xtd = None
 
         # Creates a timer that will start a data acquisition process once the app is running.
-        QtCore.QTimer.singleShot(10, self.update_daq) 
+        QtCore.QTimer.singleShot(100, self.update_daq) 
 
         # Starts a timer that will periodically update the ui and the plots.
         self.updateTimer = QtCore.QTimer()
         self.updateTimer.timeout.connect(self.update_ui)
         self.updateTimer.start(0)
 
-    def createUi(self):
-        """Sets up the user interface."""
+    def setup_ui(self, card_args, card_settings) -> None:
+        """Sets up the user interface.
+        """
         self.setWindowTitle("Spectrum Analyzer")
         self.resize(1500, 800)
 
@@ -236,6 +217,56 @@ class RtsWindow(QtGui.QMainWindow):
         # Uses the widget stylesheet for the entire window.
 
         self.setCentralWidget(self.ui)
+
+        with Card(*card_args) as adc:
+            nchannels = adc._nchannels
+            valid_fullranges_mv = adc._valid_fullranges_mv
+
+        self.ui.channelComboBox.clear()
+        for i in range(nchannels):
+            self.ui.channelComboBox.addItem(str(i), i)
+
+        self.ui.fullrangeComboBox.clear()
+        for r in valid_fullranges_mv:
+            self.ui.fullrangeComboBox.addItem("%g" % (r/1000), int(r)) 
+            # The displayed fullranges are in Volts, but the item data is in mV 
+            # to keep the values integer.
+
+        self.card_fullranges_mv = [max(valid_fullranges_mv)] * nchannels 
+        self.card_terminations = ["1M"] * nchannels
+        # While for all other card settings the point of truth is the values of 
+        # dedicated UI controls, the channel settings are stored in these
+        # lists because only the parameters of one channel are displayed in UI
+        # at a time.
+
+        # Displays the current card settings.
+
+        with NoSignals(self.ui.samplerateLineEdit) as uielem:
+            uielem.setText("%i" % card_settings["samplerate"])
+
+        with NoSignals(self.ui.nsamplesLineEdit) as uielem:
+            uielem.setText("%i" % card_settings["nsamples"])
+
+        ch = card_settings["channels"][0]
+
+        with NoSignals(self.ui.channelComboBox) as uielem:
+            uielem.setCurrentIndex(ch)
+
+        with NoSignals(self.ui.fullrangeComboBox) as uielem:
+            fr_mv = int(1000 * card_settings["fullranges"][0])  # Full range in mV.
+            ind = uielem.findData(fr_mv) 
+            uielem.setCurrentIndex(ind)
+            self.card_fullranges_mv[ch] = fr_mv
+
+        with NoSignals(self.ui.terminationComboBox) as uielem:
+            term = card_settings["terminations"][0]
+            ind = uielem.findData(term)
+            uielem.setCurrentIndex(ind)
+            self.card_terminations[ch] = term
+
+        with NoSignals(self.ui.trigmodeComboBox) as uielem:
+            ind = uielem.findData(card_settings["trig_mode"])
+            uielem.setCurrentIndex(ind)
 
         # Connects the control panel.
         
@@ -256,6 +287,18 @@ class RtsWindow(QtGui.QMainWindow):
 
         self.ui.averagePushButton.clicked.connect(self.start_averaging)
         self.ui.naveragesLineEdit.editingFinished.connect(self.set_navg)
+        self.ui.clearPushButton.clicked.connect(self.clear_ref)
+
+        # Creates the plot lines.
+
+        self.line = self.ui.spectrumPlot.plot()  # Real-time trace display.
+        self.line.setPen((250, 0, 0))
+
+        self.line_ref = self.ui.spectrumPlot.plot()  # Reference trace display.
+        self.line_ref.setPen((20, 20, 20))
+
+        self.line_td = self.ui.scopePlot.plot()  # Time domain display.
+        self.line_td.setPen((126, 47, 142))
 
     def closeEvent(self, event):
         """Executed when the window is closed. This is an overloaded Qt method.
@@ -323,7 +366,6 @@ class RtsWindow(QtGui.QMainWindow):
                     (settings["nsamples"] != self.current_settings["nsamples"]))
 
         if new_proc:
-            print(4)
 
             if self.daq_proc and self.daq_proc.is_alive():
                 self.stop_daq()
@@ -385,8 +427,8 @@ class RtsWindow(QtGui.QMainWindow):
         self.xfd = fftfreq(ns + 1, 1/sr)[0: nf]  # TODO: check this, the frequencies are probably off.
 
         # Setting x and y ranges removes autoadjustment.
-        self.ui.plotWidget.setXRange(self.xfd[0], self.xfd[-1])
-        self.ui.plotWidget.setYRange(-1, 10)
+        self.ui.spectrumPlot.setXRange(self.xfd[0], self.xfd[-1])
+        self.ui.spectrumPlot.setYRange(-1, 10)
         
         rng = settings["fullranges"][0] 
         self.xtd = np.linspace(0, nst / sr, nst)
@@ -447,39 +489,6 @@ class RtsWindow(QtGui.QMainWindow):
 
         return new_settings
 
-    def display_current_settings(self) -> None:
-        """Displays card settings in the user interface."""
-
-        with NoSignals(self.ui.samplerateLineEdit) as uielem:
-            uielem.setText("%i" % self.current_settings["samplerate"])
-
-        with NoSignals(self.ui.nsamplesLineEdit) as uielem:
-            uielem.setText("%i" % self.current_settings["nsamples"])
-
-        with NoSignals(self.ui.channelComboBox) as uielem:
-            ch = self.current_settings["channels"][0]
-            uielem.setCurrentIndex(ch)
-
-        with NoSignals(self.ui.fullrangeComboBox) as uielem:
-            fr_mv = int(1000 * self.current_settings["fullranges"][0])   # Full range in mV.
-
-            ind = uielem.findData(fr_mv) 
-            uielem.setCurrentIndex(ind)
-
-            self.card_fullranges_mv[ch] = fr_mv
-
-        with NoSignals(self.ui.terminationComboBox) as uielem:
-            term = self.current_settings["terminations"][0]
-
-            ind = uielem.findData(term)
-            uielem.setCurrentIndex(ind)
-
-            self.card_terminations[ch] = term
-
-        with NoSignals(self.ui.trigmodeComboBox) as uielem:
-            ind = uielem.findData(self.current_settings["trig_mode"])
-            uielem.setCurrentIndex(ind)
-
     def on_channel_change(self):
         ch = self.ui.channelComboBox.currentData()
 
@@ -504,6 +513,9 @@ class RtsWindow(QtGui.QMainWindow):
     def set_navg(self):
         self.navg.value = int(self.ui.naveragesLineEdit.text())
 
+    def clear_ref(self):
+        self.line_ref.setData([], [])
+
 
 class RtsWidget(QtGui.QWidget, Ui_RtsWidget):
     """The widget that contains the user interface."""
@@ -520,28 +532,16 @@ class RtsWidget(QtGui.QWidget, Ui_RtsWidget):
         self.terminationComboBox.addItem("1 MOhm", "1M")
         self.terminationComboBox.addItem("50 Ohm", "50")
 
-        with Card() as adc:  # TODO: move this to the main window.
-            nchannels = adc._nchannels
-            valid_fullranges_mv = adc._valid_fullranges_mv
+        self.spectrumPlot.setBackground("w")
+        self.spectrumPlot.setLabel("left", "PSD", units="")
+        self.spectrumPlot.setLabel("bottom", "Frequency", units="Hz")
+        self.spectrumPlot.showAxis("right")
+        self.spectrumPlot.showAxis("top")
+        self.spectrumPlot.getAxis("top").setStyle(showValues=False)
+        self.spectrumPlot.getAxis("right").setStyle(showValues=False)
 
-        self.channelComboBox.clear()
-        for i in range(nchannels):
-            self.channelComboBox.addItem(str(i), i)
-
-        self.fullrangeComboBox.clear()
-        for r in valid_fullranges_mv:
-            self.fullrangeComboBox.addItem("%g" % (r/1000), r) 
-
-        self.plotWidget.setBackground("w")
-        self.plotWidget.setLabel("left", "PSD", units="")
-        self.plotWidget.setLabel("bottom", "Frequency", units="Hz")
-        self.plotWidget.showAxis("right")
-        self.plotWidget.showAxis("top")
-        self.plotWidget.getAxis("top").setStyle(showValues=False)
-        self.plotWidget.getAxis("right").setStyle(showValues=False)
-
-        self.plotWidget.plotItem.setLogMode(False, True)  # Log y.
-        self.plotWidget.plotItem.showGrid(True, True)
+        self.spectrumPlot.plotItem.setLogMode(False, True)  # Log y.
+        self.spectrumPlot.plotItem.showGrid(True, True)
 
         self.scopePlot.setBackground("w")
         self.scopePlot.setLabel("left", "Signal", units="V")

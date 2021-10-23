@@ -13,7 +13,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 class Ui_RtsWidget(object):
     def setupUi(self, RtsWidget):
         RtsWidget.setObjectName("RtsWidget")
-        RtsWidget.resize(1149, 679)
+        RtsWidget.resize(1149, 766)
         RtsWidget.setStyleSheet("QWidget {\n"
 "    font: 8pt \"Open Sans\";\n"
 "    background-color: white;\n"
@@ -126,9 +126,14 @@ class Ui_RtsWidget(object):
         self.channelComboBox.addItem("")
         self.channelComboBox.addItem("")
         self.gridLayout.addWidget(self.channelComboBox, 3, 1, 1, 1)
+        self.clearPushButton = QtWidgets.QPushButton(self.widget)
+        self.clearPushButton.setObjectName("clearPushButton")
+        self.gridLayout.addWidget(self.clearPushButton, 12, 1, 1, 1)
         self.averagePushButton = QtWidgets.QPushButton(self.widget)
         self.averagePushButton.setObjectName("averagePushButton")
         self.gridLayout.addWidget(self.averagePushButton, 11, 1, 1, 1)
+        spacerItem3 = QtWidgets.QSpacerItem(20, 40, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding)
+        self.gridLayout.addItem(spacerItem3, 13, 1, 1, 1)
         self.nsamplesLabel = QtWidgets.QLabel(self.widget)
         self.nsamplesLabel.setObjectName("nsamplesLabel")
         self.gridLayout.addWidget(self.nsamplesLabel, 2, 0, 1, 1, QtCore.Qt.AlignRight)
@@ -156,9 +161,12 @@ class Ui_RtsWidget(object):
         self.fullrangeLabel = QtWidgets.QLabel(self.widget)
         self.fullrangeLabel.setObjectName("fullrangeLabel")
         self.gridLayout.addWidget(self.fullrangeLabel, 5, 0, 1, 1, QtCore.Qt.AlignRight)
-        self.clearPushButton = QtWidgets.QPushButton(self.widget)
-        self.clearPushButton.setObjectName("clearPushButton")
-        self.gridLayout.addWidget(self.clearPushButton, 12, 1, 1, 1)
+        self.navgrtLineEdit = QtWidgets.QLineEdit(self.widget)
+        self.navgrtLineEdit.setObjectName("navgrtLineEdit")
+        self.gridLayout.addWidget(self.navgrtLineEdit, 15, 1, 1, 1)
+        self.label_4 = QtWidgets.QLabel(self.widget)
+        self.label_4.setObjectName("label_4")
+        self.gridLayout.addWidget(self.label_4, 15, 0, 1, 1, QtCore.Qt.AlignRight)
         self.gridLayout_2.addLayout(self.gridLayout, 0, 0, 1, 1)
         self.scopePlot = PlotWidget(self.widget)
         sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
@@ -195,6 +203,7 @@ class Ui_RtsWidget(object):
         self.channelComboBox.setItemText(1, _translate("RtsWidget", "1"))
         self.channelComboBox.setItemText(2, _translate("RtsWidget", "2"))
         self.channelComboBox.setItemText(3, _translate("RtsWidget", "3"))
+        self.clearPushButton.setText(_translate("RtsWidget", "Clear"))
         self.averagePushButton.setText(_translate("RtsWidget", "Average"))
         self.nsamplesLabel.setText(_translate("RtsWidget", "N samples"))
         self.averagesCompletedLabel.setText(_translate("RtsWidget", "0"))
@@ -205,5 +214,8 @@ class Ui_RtsWidget(object):
         self.label_2.setText(_translate("RtsWidget", "N averages"))
         self.label.setText(_translate("RtsWidget", "Trigger"))
         self.fullrangeLabel.setText(_translate("RtsWidget", "Full range (V)"))
-        self.clearPushButton.setText(_translate("RtsWidget", "Clear"))
+        self.navgrtLineEdit.setToolTip(_translate("RtsWidget", "<html><head/><body><p>The number of averages for the real-time trace.</p></body></html>"))
+        self.navgrtLineEdit.setWhatsThis(_translate("RtsWidget", "<html><head/><body><p><br/></p></body></html>"))
+        self.navgrtLineEdit.setText(_translate("RtsWidget", "1"))
+        self.label_4.setText(_translate("RtsWidget", "Display averages"))
 from pyqtgraph import PlotWidget

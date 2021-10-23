@@ -44,7 +44,7 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
 
             settings = msg
 
-            navg_rt = settings.pop("naverages_rt")
+            navg_rt = settings.pop("navg_rt")
             trig_mode = settings.pop("trig_mode")
 
             adc.reset()
@@ -157,7 +157,7 @@ class RtsWindow(QtGui.QMainWindow):
                     "samplerate": 30e6,
                     "nsamples": 409600,
                     "trig_mode": "soft",
-                    "naverages_rt": 10}
+                    "navg_rt": 10}
 
         if acq_settings:
             defaults.update(acq_settings)
@@ -168,8 +168,9 @@ class RtsWindow(QtGui.QMainWindow):
         self.current_settings = defaults
 
         self.lbuff = 20  # The number of traces in the interprocess buffer.
-        self.max_disp_samplerate = 3 * 10**6  # Maximum display rate of data in samples per second
-        self.min_dt_trace = 10e-6  # The minimum trace duration in seconds
+        self.max_disp_samplerate = 3 * 10**6  # The maximum number of displayed
+                                              # samples per second.
+        self.max_disp_rate = 50  # The maximum number of plots per second.
 
         self.daq_proc = None  # A reference to the data acquisition process.
 
@@ -247,6 +248,9 @@ class RtsWindow(QtGui.QMainWindow):
         with NoSignals(self.ui.nsamplesLineEdit) as uielem:
             uielem.setText("%i" % card_settings["nsamples"])
 
+        with NoSignals(self.ui.navgrtLineEdit) as uielem:
+            uielem.setText("%i" % card_settings["navg_rt"])
+
         ch = card_settings["channels"][0]
 
         with NoSignals(self.ui.channelComboBox) as uielem:
@@ -284,6 +288,7 @@ class RtsWindow(QtGui.QMainWindow):
 
         self.ui.samplerateLineEdit.editingFinished.connect(self.update_daq)
         self.ui.nsamplesLineEdit.editingFinished.connect(self.update_daq)
+        self.ui.navgrtLineEdit.editingFinished.connect(self.update_daq)
 
         self.ui.averagePushButton.clicked.connect(self.start_averaging)
         self.ui.naveragesLineEdit.editingFinished.connect(self.set_navg)
@@ -394,6 +399,15 @@ class RtsWindow(QtGui.QMainWindow):
                                     daemon=True)
             self.daq_proc.start()
 
+        if (settings["samplerate"] != self.current_settings["samplerate"] 
+            or settings["nsamples"] != self.current_settings["nsamples"]):
+
+            # Replace the current number of averages with a new estimate.
+            settings["navg_rt"] = max(
+                ceil(settings["samplerate"] / self.max_disp_samplerate),
+                ceil((settings["samplerate"] / settings["nsamples"]) / self.max_disp_rate)
+            )
+
         # Sends new settings.
         self.pipe_conn.send(settings)
 
@@ -422,6 +436,8 @@ class RtsWindow(QtGui.QMainWindow):
             uielem.setText("%i" % sr)
         with NoSignals(self.ui.nsamplesLineEdit) as uielem:
             uielem.setText("%i" % ns)
+        with NoSignals(self.ui.navgrtLineEdit) as uielem:
+            uielem.setText("%i" % settings["navg_rt"])
 
          # Calculates the x axis and the spectrum plot.
         self.xfd = fftfreq(ns + 1, 1/sr)[0: nf]  # TODO: check this, the frequencies are probably off.
@@ -469,8 +485,7 @@ class RtsWindow(QtGui.QMainWindow):
 
         samplerate = int(float(self.ui.samplerateLineEdit.text()))
         nsamples = int(float(self.ui.nsamplesLineEdit.text()))
-
-        navg_rt = ceil(samplerate / self.max_disp_samplerate)
+        navg_rt = int(float(self.ui.navgrtLineEdit.text()))
 
         # Copies the existing settings to preserve user-supplied values.
         new_settings = self.current_settings.copy()
@@ -482,10 +497,7 @@ class RtsWindow(QtGui.QMainWindow):
                              "samplerate": samplerate,
                              "nsamples": nsamples,
                              "trig_mode": trig_mode,
-                             "naverages_rt": navg_rt})
-
-        # The number of traces averaged before display. TODO: remove and display in
-        print(f"Averaging over {navg_rt} traces")
+                             "navg_rt": navg_rt})
 
         return new_settings
 

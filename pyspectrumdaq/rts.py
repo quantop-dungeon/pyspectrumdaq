@@ -25,7 +25,7 @@ from dummy_card import DummyCard as Card  #TODO: remove
 
 TDSF = 100  # The shrinking factor for time-domain data.
 COMM_POLL_INTVL = 0.5  # (seconds)
-RT_NOTIF_INTVL = 15  # (seconds)
+RT_NOT_INTVL = 15  # (seconds)
 
 
 def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_completed) -> None:
@@ -84,7 +84,10 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
             # The duration of one trace (seconds).
             dt_trace = adc.nsamples / adc.samplerate
 
-            n_slow_update = max(int(COMM_POLL_INTVL / dt_trace / navg_rt), 1)
+            n_comm_poll = max(int(COMM_POLL_INTVL / dt_trace / navg_rt), 1)
+            # Polling the connection is time consuming, and also it breaks 
+            # if polled too frequently, so we only do it once every
+            # n_comm_poll * navg_rt traces.
 
             start_time = time()
             prev_not_time = start_time
@@ -93,7 +96,7 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
                 a[:] = data[:, 0]
                 calc_fft()
                 calc_abs_square(y, b)
-                # Now there is a new absolute squared FFT result stored in y.
+                # Now there is a new absolute squared FFT stored in y.
 
                 # Adds the trace to the accumulator buffer, which is independent of the fast averaging.
                 if navg_completed.value < navg.value:
@@ -119,24 +122,25 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
                     # Updates the time domain data.
                     npbuff_t[i][:] = data[: nst, 0]
 
-                    # Releases the buffer lock so that the new spectrum and time
-                    # domain data can be read by the ui process.
+                    # Normalizes the data and releases the lock so that 
+                    # the new spectrum and the time domain data can be read 
+                    # by the ui process.
+                    divide_array(npbuff[i], navg_rt)
                     buff[i].release()
 
                     cnt.value += 1
 
                     j = 0  # Resets the fast averaging counter.
 
-                    if cnt.value % n_slow_update == 0:
+                    if cnt.value % n_comm_poll == 0:
                         now = time()
                         delay = (now - start_time) - navg_rt * cnt.value * dt_trace
 
-                        if delay > 0 and (now - prev_not_time) > RT_NOTIF_INTVL:
+                        if delay > 0 and (now - prev_not_time) > RT_NOT_INTVL:
                             # Prints how far it is from real-time prformance.
                             print(f"The data reading is behind real time by (s): {delay}")
                             prev_not_time = now
 
-                        # The conncetion breaks if polled too frequently.
                         if conn.poll():
                             break
 
@@ -155,9 +159,6 @@ class RtsWindow(QtGui.QMainWindow):
         self.lbuff = 20  # The number of traces in the interprocess buffer.
         self.max_disp_samplerate = 3 * 10**6  # Maximum display rate of data in samples per second
         self.min_dt_trace = 10e-6  # The minimum trace duration in seconds
-
-        # Number of traces to be averaged before displaying.
-        self.navg_disp = 10  # TODO: remove this in the future and let the daq process do the normalization.
 
         self.daq_proc = None  # A reference to the data acquisition process.
 
@@ -282,23 +283,21 @@ class RtsWindow(QtGui.QMainWindow):
             self.r_cnt += 1
 
             # Updates the frequency domain display.
-            divide_array(yfd, self.navg_disp)
             self.line.setData(self.xfd, yfd)
 
             # Updates the time domain display.
             self.line_td.setData(self.xtd, ytd)
 
         if self.averging_now:
-            navg_c = self.navg.value
-            cmpl_c = self.navg_completed.value
+            navg_compl = self.navg_completed.value
 
-            self.ui.averagesCompletedLabel.setText(str(cmpl_c))
+            self.ui.averagesCompletedLabel.setText(str(navg_compl))
 
-            if cmpl_c >= navg_c:
+            if navg_compl >= self.navg.value:
                 self.averging_now = False
 
                 self.yfd_ref = self.npbuff_acc.copy()
-                divide_array(self.yfd_ref, cmpl_c)
+                divide_array(self.yfd_ref, navg_compl)
 
                 # Displays the reference trace.
                 self.line_ref.setData(self.xfd, self.yfd_ref)
@@ -430,7 +429,6 @@ class RtsWindow(QtGui.QMainWindow):
         nsamples = int(float(self.ui.nsamplesLineEdit.text()))
 
         navg_rt = ceil(samplerate / self.max_disp_samplerate)
-        self.navg_disp = navg_rt
 
         # Copies the existing settings to preserve user-supplied values.
         new_settings = self.current_settings.copy()
@@ -445,7 +443,7 @@ class RtsWindow(QtGui.QMainWindow):
                              "naverages_rt": navg_rt})
 
         # The number of traces averaged before display. TODO: remove and display in
-        print(f"Averaging over {self.navg_disp} traces")
+        print(f"Averaging over {navg_rt} traces")
 
         return new_settings
 
@@ -504,10 +502,7 @@ class RtsWindow(QtGui.QMainWindow):
         self.update_daq()
 
     def set_navg(self):
-        navg = int(self.ui.naveragesLineEdit.text())
-
-        if self.navg.value != navg:
-            self.navg.value = navg
+        self.navg.value = int(self.ui.naveragesLineEdit.text())
 
 
 class RtsWidget(QtGui.QWidget, Ui_RtsWidget):

@@ -150,7 +150,9 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
 
 class RtsWindow(QtGui.QMainWindow):
 
-    def __init__(self, card_args: Sequence = (), acq_settings: Union[dict, None] = None) -> None:
+    def __init__(self, card_args: Sequence = (), 
+                 acq_settings: Union[dict, None] = None,
+                 fft_lims: tuple = (12, 24)) -> None:
         super().__init__()
 
         defaults = {"mode": "fifo_single",
@@ -158,14 +160,14 @@ class RtsWindow(QtGui.QMainWindow):
                     "fullranges": (10,),
                     "terminations": ("1M",),
                     "samplerate": 30e6,
-                    "nsamples": 409600,
+                    "nsamples": 2**19,
                     "trig_mode": "soft",
                     "navg_rt": 10}
 
         if acq_settings:
             defaults.update(acq_settings)
 
-        self.setup_ui(card_args, defaults)
+        self.setup_ui(card_args, defaults, fft_lims)
 
         self.card_args = card_args
         self.current_settings = defaults
@@ -210,7 +212,7 @@ class RtsWindow(QtGui.QMainWindow):
         self.updateTimer.timeout.connect(self.update_ui)
         self.updateTimer.start(0)
 
-    def setup_ui(self, card_args, card_settings) -> None:
+    def setup_ui(self, card_args, card_settings, fft_lims) -> None:
         """Sets up the user interface.
         """
         self.setWindowTitle("Spectrum Analyzer")
@@ -221,6 +223,10 @@ class RtsWindow(QtGui.QMainWindow):
         # Uses the widget stylesheet for the entire window.
 
         self.setCentralWidget(self.ui)
+
+        self.ui.nsamplesComboBox.clear()
+        for i in range(*fft_lims):
+            self.ui.nsamplesComboBox.addItem(f"{2**i:,}", 2**i)
 
         with Card(*card_args) as adc:
             nchannels = adc._nchannels
@@ -248,8 +254,9 @@ class RtsWindow(QtGui.QMainWindow):
         with NoSignals(self.ui.samplerateLineEdit) as uielem:
             uielem.setText("%i" % card_settings["samplerate"])
 
-        with NoSignals(self.ui.nsamplesLineEdit) as uielem:
-            uielem.setText("%i" % card_settings["nsamples"])
+        with NoSignals(self.ui.nsamplesComboBox) as uielem:
+            ind = uielem.findData(card_settings["nsamples"])
+            uielem.setCurrentIndex(ind)
 
         with NoSignals(self.ui.navgrtLineEdit) as uielem:
             uielem.setText("%i" % card_settings["navg_rt"])
@@ -290,7 +297,7 @@ class RtsWindow(QtGui.QMainWindow):
         self.ui.trigmodeComboBox.currentIndexChanged.connect(self.update_daq)
 
         self.ui.samplerateLineEdit.editingFinished.connect(self.update_daq)
-        self.ui.nsamplesLineEdit.editingFinished.connect(self.update_daq)
+        self.ui.nsamplesComboBox.currentIndexChanged.connect(self.update_daq)
         self.ui.navgrtLineEdit.editingFinished.connect(self.update_daq)
 
         self.ui.averagePushButton.clicked.connect(self.start_averaging)
@@ -435,10 +442,13 @@ class RtsWindow(QtGui.QMainWindow):
 
         with NoSignals(self.ui.samplerateLineEdit) as uielem:
             uielem.setText("%i" % sr)
-        with NoSignals(self.ui.nsamplesLineEdit) as uielem:
-            uielem.setText("%i" % ns)
+        with NoSignals(self.ui.nsamplesComboBox) as uielem:
+            ind = uielem.findData(ns)
+            uielem.setCurrentIndex(ind)
         with NoSignals(self.ui.navgrtLineEdit) as uielem:
             uielem.setText("%i" % settings["navg_rt"])
+
+        self.ui.rbwLabel.setText("%.2f" % (sr / ns))  # TODO: check the consistency of the rbw display.
 
          # Calculates the x axis and the spectrum plot.
         self.xfd = fftfreq(ns + 1, 1/sr)[0: nf]  # TODO: check this, the frequencies are probably off.
@@ -485,7 +495,7 @@ class RtsWindow(QtGui.QMainWindow):
         term = self.ui.terminationComboBox.currentData()
 
         samplerate = int(float(self.ui.samplerateLineEdit.text()))
-        nsamples = int(float(self.ui.nsamplesLineEdit.text()))
+        nsamples = self.ui.nsamplesComboBox.currentData()
         navg_rt = int(float(self.ui.navgrtLineEdit.text()))
 
         # Copies the existing settings to preserve user-supplied values.

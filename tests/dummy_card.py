@@ -1,6 +1,6 @@
 import time
 
-from numpy import dtype
+import numpy as np
 from numpy.random import random
 
 class DummyCard:
@@ -51,18 +51,23 @@ class DummyCard:
         print(args)
         print(kwargs)
 
-    def fifo(self, convert=True):
+    def fifo(self, n=0, convert=True):
         """Generates random traces while emulating the delays of real-time data 
         acquisition by the card."""
 
-        # The sampling time of one trace (seconds).
-        dt_trace = self.nsamples / self.samplerate
+        ns = self.nsamples
+        sr = self.samplerate
+
+        dt_trace = ns / sr  # The sampling time of one trace (seconds).
 
         cnt = 0  # The trace counter.
 
         start_time = time.time()
         while True:
-            data = random((self.nsamples, self.nchannels))
+
+            # The output is a white noise process.
+            data = (random((ns, self.nchannels)) - 0.5) * np.sqrt(sr / 30e6)
+
             cnt += 1
 
             now = time.time()

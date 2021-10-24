@@ -8,7 +8,6 @@ from multiprocessing import Array
 from multiprocessing import Pipe
 
 import numpy as np
-from numpy.fft import fftfreq  # TODO: replace this with manual calculation
 
 from numba import njit
 from numba import prange
@@ -16,7 +15,7 @@ from numba import prange
 from pyfftw import FFTW
 from pyfftw import empty_aligned
 
-import pyqtgraph as pg
+from pyqtgraph import mkQApp
 from pyqtgraph.Qt import QtCore
 from pyqtgraph.Qt import QtGui
 
@@ -58,8 +57,10 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
 
             conn.send({"samplerate": adc.samplerate, "nsamples": adc.nsamples})
 
-            nf = adc.nsamples // 2 + 1  # The number of frequency bins.
-            nst = adc.nsamples // TDSF  # The number of samples in the time-domain trace.
+            ns = adc.nsamples
+            sr = adc.samplerate
+            nf = ns // 2 + 1  # The number of frequency bins.
+            nst = ns // TDSF  # The number of samples in the time-domain trace.
 
             if init:
                 npbuff = [np.ndarray((nf,), dtype=np.float64, buffer=a.get_obj()) for a in buff]
@@ -84,8 +85,7 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
             cnt.value = 0  # The number of acquired traces TODO: divided by navg_rt
             navg_completed.value = 0
 
-            # The duration of one trace (seconds).
-            dt_trace = adc.nsamples / adc.samplerate
+            dt_trace = ns / sr  # The duration of one trace (seconds).
 
             n_comm_poll = max(int(COMM_POLL_INTVL / dt_trace / navg_rt), 1)
             # Polling the connection is time consuming, and also it breaks 
@@ -125,10 +125,11 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
                     # Updates the time domain data.
                     npbuff_t[i][:] = data[: nst, 0]
 
-                    # Normalizes the data and releases the lock so that 
-                    # the new spectrum and the time domain data can be read 
-                    # by the ui process.
-                    np.divide(npbuff[i], navg_rt, out=npbuff[i])
+                    # Normalizes the spectrum to power spectral density. 
+                    np.divide(npbuff[i], navg_rt * ns * sr, out=npbuff[i])
+
+                    # Releases the lock so that the new spectrum and 
+                    # the time domain data can be read by the ui process.
                     buff[i].release()
 
                     cnt.value += 1
@@ -315,6 +316,10 @@ class RtsWindow(QtGui.QMainWindow):
         self.line_td = self.ui.scopePlot.plot()  # Time domain display.
         self.line_td.setPen((126, 47, 142))
 
+        # Setting x and y ranges removes autoadjustment.
+        self.ui.spectrumPlot.setXRange(0, card_settings["samplerate"] / 2)
+        self.ui.spectrumPlot.setYRange(-12, 1)
+
     def closeEvent(self, event):
         """Executed when the window is closed. This is an overloaded Qt method.
         """
@@ -354,8 +359,11 @@ class RtsWindow(QtGui.QMainWindow):
             if navg_compl >= self.navg.value:
                 self.averging_now = False
 
+                ns = self.current_settings["nsamples"]
+                sr = self.current_settings["samplerate"]
+
                 # Acquires and displays a new reference trace.
-                self.yfd_ref = self.npbuff_acc / navg_compl
+                self.yfd_ref = self.npbuff_acc / (navg_compl * ns * sr)
                 self.line_ref.setData(self.xfd, self.yfd_ref)
 
     def update_daq(self) -> None:
@@ -448,14 +456,12 @@ class RtsWindow(QtGui.QMainWindow):
         with NoSignals(self.ui.navgrtLineEdit) as uielem:
             uielem.setText("%i" % settings["navg_rt"])
 
-        self.ui.rbwLabel.setText("%.2f" % (sr / ns))  # TODO: check the consistency of the rbw display.
+        # Displays the spacing between the Fourier transform frequencies.
+        df = (sr / ns)
+        self.ui.rbwLabel.setText("%.2f" % df)
 
          # Calculates the x axis and the spectrum plot.
-        self.xfd = fftfreq(ns + 1, 1/sr)[0: nf]  # TODO: check this, the frequencies are probably off.
-
-        # Setting x and y ranges removes autoadjustment.
-        self.ui.spectrumPlot.setXRange(self.xfd[0], self.xfd[-1])
-        self.ui.spectrumPlot.setYRange(-1, 10)
+        self.xfd = np.arange(0, nf) * df
         
         rng = settings["fullranges"][0] 
         self.xtd = np.linspace(0, nst / sr, nst)
@@ -581,7 +587,7 @@ def rts():
     """Starts a real-time spectrum analyzer."""
 
     # Same as app = QtGui.QApplication(*args) with optimum parameters
-    app = pg.mkQApp()
+    app = mkQApp()
 
     mw = RtsWindow()
     mw.show()

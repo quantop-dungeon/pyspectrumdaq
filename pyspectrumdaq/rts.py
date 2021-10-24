@@ -19,10 +19,10 @@ from pyqtgraph import mkQApp
 from pyqtgraph.Qt import QtCore
 from pyqtgraph.Qt import QtGui
 
-from rtsui import Ui_RtsWidget
+from .rtsui import Ui_RtsWidget
 
-#from .card import Card
-from dummy_card import DummyCard as Card  #TODO: remove
+from .card import Card
+#from dummy_card import DummyCard as Card  #TODO: remove
 
 
 TDSF = 100  # The shrinking factor for time-domain data.
@@ -163,7 +163,7 @@ class RtsWindow(QtGui.QMainWindow):
                     "samplerate": 30e6,
                     "nsamples": 2**19,
                     "trig_mode": "soft",
-                    "navg_rt": 10}
+                    "navg_rt": 3}
 
         if acq_settings:
             defaults.update(acq_settings)
@@ -174,7 +174,7 @@ class RtsWindow(QtGui.QMainWindow):
         self.current_settings = defaults
 
         self.lbuff = 20  # The number of traces in the interprocess buffer.
-        self.max_disp_samplerate = 3 * 10**6  # The maximum number of displayed
+        self.max_disp_samplerate = 1 * 10**7  # The maximum number of displayed
                                               # samples per second.
         self.max_disp_rate = 50  # The maximum number of plots per second.
 
@@ -205,10 +205,11 @@ class RtsWindow(QtGui.QMainWindow):
         self.yfd_ref = None
         self.xtd = None
 
-        # Creates a timer that will start a data acquisition process once the app is running.
+        # Creates a timer that will start a data acquisition process once 
+        # the Qt event loop is running.
         QtCore.QTimer.singleShot(100, self.update_daq) 
 
-        # Starts a timer that will periodically update the ui and the plots.
+        # Starts a timer that will periodically update data displays.
         self.updateTimer = QtCore.QTimer()
         self.updateTimer.timeout.connect(self.update_ui)
         self.updateTimer.start(0)
@@ -562,6 +563,8 @@ class RtsWidget(QtGui.QWidget, Ui_RtsWidget):
         self.terminationComboBox.addItem("50 Ohm", "50")
 
         self.spectrumPlot.setBackground("w")
+        self.spectrumPlot.setClipToView(True)
+        self.spectrumPlot.setDownsampling(auto=True)  # If True, resample the data before plotting to avoid plotting multiple line segments per pixel.
         self.spectrumPlot.setLabel("left", "PSD", units="")
         self.spectrumPlot.setLabel("bottom", "Frequency", units="Hz")
         self.spectrumPlot.showAxis("right")
@@ -579,8 +582,6 @@ class RtsWidget(QtGui.QWidget, Ui_RtsWidget):
         self.scopePlot.showAxis("top")
         self.scopePlot.getAxis("top").setStyle(showValues=False)
         self.scopePlot.getAxis("right").setStyle(showValues=False) 
-
-        # TODO: add frame, remove axes for the time domain plot.
 
 
 def rts():

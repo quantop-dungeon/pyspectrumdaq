@@ -408,7 +408,7 @@ class Card:
             # Converts the data to voltage readings.
             cfs = tuple(self._conversions[n] for n in self._acq_channels)
             dim = (self._nsamples, len(self._acq_channels))
-            data = np.zeros(dim, dtype=np.float64)
+            data = np.empty(dim, dtype=np.float64)
             _convert(data, self._buffer[0], cfs)
         else:
             # Takes a copy because the buffer can be overwritten by a next DMA.
@@ -469,7 +469,7 @@ class Card:
 
             if convert:
                 # Converts the data to voltage readings.
-                data = np.zeros((ns, nchannels), dtype=np.float64)
+                data = np.empty((ns, nchannels), dtype=np.float64)
                 _convert(data, self._buffer[i], cfs)
             else:
                 # Takes a copy because the buffer can be overwritten.

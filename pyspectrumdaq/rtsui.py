@@ -2,13 +2,11 @@
 
 # Form implementation generated from reading ui file 'rts.ui'
 #
-# Created by: PyQt5 UI code generator 5.12.3
+# Created by: PyQt5 UI code generator 5.9.2
 #
 # WARNING! All changes made in this file will be lost!
 
-
 from PyQt5 import QtCore, QtGui, QtWidgets
-
 
 class Ui_RtsWidget(object):
     def setupUi(self, RtsWidget):
@@ -155,7 +153,7 @@ class Ui_RtsWidget(object):
         self.channelLabel.setObjectName("channelLabel")
         self.gridLayout.addWidget(self.channelLabel, 5, 0, 1, 1, QtCore.Qt.AlignRight)
         self.trigmodeComboBox = QtWidgets.QComboBox(self.widget)
-        self.trigmodeComboBox.setMaximumSize(QtCore.QSize(100, 16777215))
+        self.trigmodeComboBox.setMaximumSize(QtCore.QSize(16777215, 16777215))
         self.trigmodeComboBox.setObjectName("trigmodeComboBox")
         self.trigmodeComboBox.addItem("")
         self.trigmodeComboBox.addItem("")
@@ -173,6 +171,7 @@ class Ui_RtsWidget(object):
         self.fullrangeLabel.setObjectName("fullrangeLabel")
         self.gridLayout.addWidget(self.fullrangeLabel, 7, 0, 1, 1, QtCore.Qt.AlignRight)
         self.navgrtLineEdit = QtWidgets.QLineEdit(self.widget)
+        self.navgrtLineEdit.setMaximumSize(QtCore.QSize(100, 16777215))
         self.navgrtLineEdit.setObjectName("navgrtLineEdit")
         self.gridLayout.addWidget(self.navgrtLineEdit, 17, 1, 1, 1)
         self.gridLayout_2.addLayout(self.gridLayout, 0, 0, 1, 1)
@@ -230,4 +229,5 @@ class Ui_RtsWidget(object):
         self.navgrtLineEdit.setToolTip(_translate("RtsWidget", "<html><head/><body><p>The number of averages for the real-time trace.</p></body></html>"))
         self.navgrtLineEdit.setWhatsThis(_translate("RtsWidget", "<html><head/><body><p><br/></p></body></html>"))
         self.navgrtLineEdit.setText(_translate("RtsWidget", "1"))
+
 from pyqtgraph import PlotWidget

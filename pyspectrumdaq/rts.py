@@ -153,7 +153,7 @@ class RtsWindow(QtGui.QMainWindow):
 
     def __init__(self, card_args: Sequence = (), 
                  acq_settings: Union[dict, None] = None,
-                 fft_lims: tuple = (12, 24)) -> None:
+                 fft_lims: tuple = (12, 26)) -> None:
         super().__init__()
 
         defaults = {"mode": "fifo_single",
@@ -176,7 +176,7 @@ class RtsWindow(QtGui.QMainWindow):
         self.lbuff = 20  # The number of traces in the interprocess buffer.
         self.max_disp_samplerate = 1 * 10**7  # The maximum number of displayed
                                               # samples per second.
-        self.max_disp_rate = 50  # The maximum number of plots per second.
+        self.max_disp_rate = 40  # The maximum number of plots per second.
 
         self.daq_proc = None  # A reference to the data acquisition process.
 

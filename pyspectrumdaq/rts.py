@@ -19,11 +19,11 @@ from pyqtgraph import mkQApp
 from pyqtgraph.Qt import QtCore
 from pyqtgraph.Qt import QtGui
 
-from rtsui import Ui_RtsWidget
+from .rtsui import Ui_RtsWidget
 from trace_list import TraceList
 
-#from .card import Card
-from dummy_card import DummyCard as Card  #TODO: remove
+from .card import Card
+#from dummy_card import DummyCard as Card  #TODO: remove
 
 
 TDSF = 100  # The shrinking factor for time-domain data.
@@ -34,7 +34,7 @@ RT_NOT_INTVL = 15  # (seconds)
 def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_completed) -> None:
     """ Starts continuous data streaming from the card. 
     """
-    init = True
+    ns = None
 
     with Card(*card_args) as adc:    
         while True:
@@ -42,7 +42,6 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
 
             # The message can be a request to stop or new settings.
             if msg == "stop":
-                cnt.value = 0
                 break
 
             settings = msg
@@ -58,12 +57,13 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
 
             conn.send({"samplerate": adc.samplerate, "nsamples": adc.nsamples})
 
-            ns = adc.nsamples
-            sr = adc.samplerate
-            nf = ns // 2 + 1  # The number of frequency bins.
-            nst = ns // TDSF  # The number of samples in the time-domain trace.
+            if adc.nsamples != ns:
+                # Reformats the buffers for the new number of samples.
 
-            if init:
+                ns = adc.nsamples
+                nf = ns // 2 + 1  # The number of frequency bins.
+                nst = ns // TDSF  # The number of samples in the time-domain trace.
+
                 npbuff = [np.ndarray((nf,), dtype=np.float64, buffer=a.get_obj()) for a in buff]
                 npbuff_acc = np.ndarray((nf,), dtype=np.float64, buffer=buff_acc)
                 npbuff_t = [np.ndarray((nst,), dtype=np.float64, buffer=a) for a in buff_t]
@@ -80,12 +80,11 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
                 
                 y = np.zeros(nf, dtype=np.float64)  # A buffer to store abs spectrum squared.
 
-                init = False
-
             j = 0  # The fast accumulation counter.
             cnt.value = 0  # The number of acquired traces TODO: divided by navg_rt
             navg_completed.value = 0
 
+            sr = adc.samplerate
             dt_trace = ns / sr  # The duration of one trace (seconds).
 
             n_comm_poll = max(int(COMM_POLL_INTVL / dt_trace / navg_rt), 1)
@@ -147,6 +146,12 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
                             prev_not_time = now
 
                         if conn.poll():
+                            # The data acquisition stops when a new message  
+                            # arrives. The trace counter is set to zero because 
+                            # otherwise the reading process that simultaneously 
+                            # resets its own independent counter may be tricked 
+                            # into thinking that it is lagging behind. 
+                            cnt.value = 0 
                             break
 
 
@@ -176,8 +181,8 @@ class RtsWindow(QtGui.QMainWindow):
         self.current_settings = defaults
 
         self.lbuff = 20  # The number of traces in the interprocess buffer.
-        self.max_disp_samplerate = 1 * 10**7  # The maximum number of displayed
-                                              # samples per second.
+        self.max_disp_samplerate = 1 * 10**7  # The maximum number of samples
+                                              # displayed per second.
         self.max_disp_rate = 40  # The maximum number of plots per second.
 
         self.daq_proc = None  # A reference to the data acquisition process.
@@ -194,8 +199,8 @@ class RtsWindow(QtGui.QMainWindow):
         self.buff = []  # List[Array]. The buffer for frequency-domain data.
         self.npbuff = []  # List[np.ndarray]. The same buffer as numpy arrays.
 
-        self.buff_acc = None  # The buffer for averaged (accumulated) data.
-        self.npbuff_acc = None
+        self.buff_acc = ()  # The buffer for averaged (accumulated) data.
+        self.npbuff_acc = ()
 
         self.buff_t = []  # List[Array]. The buffer for time-domain data.
         self.npbuff_t = []  # List[np.ndarray].
@@ -306,7 +311,7 @@ class RtsWindow(QtGui.QMainWindow):
         self.ui.navgrtLineEdit.editingFinished.connect(self.update_daq)
 
         self.ui.averagePushButton.clicked.connect(self.start_averaging)
-        self.ui.naveragesLineEdit.editingFinished.connect(self.set_navg)
+        self.ui.naveragesLineEdit.editingFinished.connect(self.update_navg)
 
         # Creates a trace list.
         self.ui.traceListWidget.clear()
@@ -415,31 +420,40 @@ class RtsWindow(QtGui.QMainWindow):
             # Such calls are discarded.
             return
 
+        if (settings["samplerate"] != self.current_settings["samplerate"] 
+            or settings["nsamples"] != self.current_settings["nsamples"]):
+
+            # Replace the current number of display averages with an appropriate
+            # estimate for new parameters.
+            
+            trace_acq_rate = settings["samplerate"] / settings["nsamples"]
+
+            settings["navg_rt"] = max(
+                ceil(settings["samplerate"] / self.max_disp_samplerate),
+                ceil(trace_acq_rate / self.max_disp_rate)
+            )
+
+            # TODO: update lbuff
+
         self.r_cnt = 0
         self.show_overflow = True
         self.averging_now = False
 
-        # Checks if there is a need to create a new process.
-        new_proc = (not self.daq_proc or 
-                    (settings["nsamples"] != self.current_settings["nsamples"]))
+        # Calculates the required sizes of interprocess buffers.
+        ns_req = settings["nsamples"] 
+        nf_req = ns_req // 2 + 1  
 
-        if new_proc:
+        if not self.daq_proc or nf_req > len(self.buff_acc):
+            # Starts a new daq process.
 
             if self.daq_proc and self.daq_proc.is_alive():
                 self.stop_daq()
 
-            # Before starting a new process, a buffer needs to be allocated for
-            # interprocess communication, for which we need the number of samples. 
-            # 2048 samples is the trace rounding margin.
-            ns_est = settings["nsamples"] + 2048 
-            nf_est = ns_est // 2 + 1  
-
-            # Allocates bufferst that will be shared between the processes.
-            # The frequency-domain buffers are completely responsible for synchronization, all other
-            # shared buffers do not have their own locks.
-            self.buff = [Array("d", nf_est, lock=True) for _ in range(self.lbuff)]
-            self.buff_acc = Array("d", nf_est, lock=False)
-            self.buff_t = [Array("d", ns_est // TDSF, lock=False) 
+            # Allocates buffers for interprocess communication. The frequency 
+            # domain buffers are fully responsible for synchronization.
+            self.buff = [Array("d", nf_req, lock=True) for _ in range(self.lbuff)]
+            self.buff_acc = Array("d", nf_req, lock=False)  # TODO: add a lock here
+            self.buff_t = [Array("d", ns_req // TDSF, lock=False) 
                            for _ in range(self.lbuff)]
 
             self.pipe_conn, conn2 = Pipe()
@@ -452,16 +466,7 @@ class RtsWindow(QtGui.QMainWindow):
                                     daemon=True)
             self.daq_proc.start()
 
-        if (settings["samplerate"] != self.current_settings["samplerate"] 
-            or settings["nsamples"] != self.current_settings["nsamples"]):
-
-            # Replace the current number of averages with a new estimate.
-            settings["navg_rt"] = max(
-                ceil(settings["samplerate"] / self.max_disp_samplerate),
-                ceil((settings["samplerate"] / settings["nsamples"]) / self.max_disp_rate)
-            )
-
-        # Sends new settings.
+        # Sends new settings to the daq process.
         self.pipe_conn.send(settings)
 
         # Gets the true sampling rate and the trace size from the card.
@@ -470,14 +475,12 @@ class RtsWindow(QtGui.QMainWindow):
         sr = msg["samplerate"]
         ns = msg["nsamples"]
 
-        settings.update(msg)
-        self.current_settings = settings
-
         nf = ns // 2 + 1  # The number of frequency bins.
         nst = ns // TDSF  # The number of samples in the time-domain trace.
 
-        if new_proc:
-            # Formats the interprocess buffers based on the actual number of samples if a trace.
+        if ns != self.current_settings["nsamples"] or not self.npbuff:
+            # Formats the interprocess buffers based on the actual number of samples.
+            
             self.npbuff = [np.ndarray((nf,), dtype=np.float64, buffer=a.get_obj())
                            for a in self.buff]
             self.npbuff_acc = np.ndarray((nf,), dtype=np.float64, 
@@ -485,11 +488,16 @@ class RtsWindow(QtGui.QMainWindow):
             self.npbuff_t = [np.ndarray((nst,), dtype=np.float64, buffer=a) 
                             for a in self.buff_t]
 
+        settings.update(msg)
+        self.current_settings = settings
+
         with NoSignals(self.ui.samplerateLineEdit) as uielem:
             uielem.setText("%i" % sr)
+
         with NoSignals(self.ui.nsamplesComboBox) as uielem:
             ind = uielem.findData(ns)
             uielem.setCurrentIndex(ind)
+
         with NoSignals(self.ui.navgrtLineEdit) as uielem:
             uielem.setText("%i" % settings["navg_rt"])
 
@@ -512,16 +520,17 @@ class RtsWindow(QtGui.QMainWindow):
             self.pipe_conn.send("stop")
             self.daq_proc.join()
 
-    def start_averaging(self):
-        self.set_navg()
+    def start_averaging(self) -> None:
+        """Initiates the acquisition of a new averaged reference trace. """
+
+        self.update_navg()
         self.averging_now = True
 
         # This tells the daq process to re-start averaging.
         self.navg_completed.value = 0
 
     def get_settings_from_ui(self) -> dict:
-        """ Gets card settings from the user interface. 
-        """
+        """Gets card settings from the user interface. """
 
         trig_mode = self.ui.trigmodeComboBox.currentData()
 
@@ -573,7 +582,7 @@ class RtsWindow(QtGui.QMainWindow):
 
         self.update_daq()
 
-    def set_navg(self):
+    def update_navg(self):
         self.navg.value = int(self.ui.naveragesLineEdit.text())
 
 
@@ -619,7 +628,7 @@ def rts():
     # Same as app = QtGui.QApplication(*args) with optimum parameters
     app = mkQApp()
 
-    mw = RtsWindow(basedir=r"D:\Sergey\Tmp\tmp Python\h5py")
+    mw = RtsWindow()
     mw.show()
 
     QtGui.QApplication.instance().exec_()

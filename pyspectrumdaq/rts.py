@@ -19,16 +19,18 @@ from pyqtgraph import mkQApp
 from pyqtgraph.Qt import QtCore
 from pyqtgraph.Qt import QtGui
 
-from .rtsui import Ui_RtsWidget
+from rtsui import Ui_RtsWidget
 from trace_list import TraceList
 
-from .card import Card
-#from dummy_card import DummyCard as Card  #TODO: remove
+#from .card import Card
+from dummy_card import DummyCard as Card  #TODO: remove
 
 
 TDSF = 100  # The shrinking factor for time-domain data.
 COMM_POLL_INTVL = 0.5  # (seconds)
 RT_NOT_INTVL = 15  # (seconds)
+LBUFF_MIN = 2  # The minimum size of the interprocess buffer in traces.
+LBUFF_MAX = 20  # The maximum number of traces in the interprocess buffer.
 
 
 def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_completed) -> None:
@@ -48,6 +50,9 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
 
             navg_rt = settings.pop("navg_rt")
             trig_mode = settings.pop("trig_mode")
+            lbuff = settings.pop("lbuff")  # The size of the interprocess buffer in traces.
+
+            print(lbuff)
 
             adc.reset()
             
@@ -67,8 +72,6 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
                 npbuff = [np.ndarray((nf,), dtype=np.float64, buffer=a.get_obj()) for a in buff]
                 npbuff_acc = np.ndarray((nf,), dtype=np.float64, buffer=buff_acc)
                 npbuff_t = [np.ndarray((nst,), dtype=np.float64, buffer=a) for a in buff_t]
-                
-                nbuff = len(buff)  # The size of the interprocess buffer in traces.
 
                 # Auxiliary arrays for the calcualtion of FFT.
                 a = empty_aligned(2 * (nf - 1), dtype="float64")
@@ -110,7 +113,7 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
 
                     navg_completed.value += 1
 
-                i = (cnt.value % nbuff)   # The index inside the real-time buffer.
+                i = (cnt.value % lbuff)   # The index inside the real-time buffer.
 
                 if j == 0:
                     buff[i].acquire()
@@ -170,7 +173,8 @@ class RtsWindow(QtGui.QMainWindow):
                     "samplerate": 30e6,
                     "nsamples": 2**19,
                     "trig_mode": "soft",
-                    "navg_rt": 3}
+                    "navg_rt": 3,
+                    "lbuff": LBUFF_MAX}
 
         if acq_settings:
             defaults.update(acq_settings)
@@ -180,10 +184,10 @@ class RtsWindow(QtGui.QMainWindow):
         self.card_args = card_args
         self.current_settings = defaults
 
-        self.lbuff = 20  # The number of traces in the interprocess buffer.
         self.max_disp_samplerate = 1 * 10**7  # The maximum number of samples
                                               # displayed per second.
         self.max_disp_rate = 40  # The maximum number of plots per second.
+        self.max_delay = 1  # (s)
 
         self.daq_proc = None  # A reference to the data acquisition process.
 
@@ -360,10 +364,10 @@ class RtsWindow(QtGui.QMainWindow):
         new data from the daq process.
         """
 
-        lbuff = len(self.buff)
+        lbuff = self.current_settings["lbuff"]
         w_cnt = self.w_cnt.value  # The counter value of the writing process.
 
-        if w_cnt > self.r_cnt and lbuff > 0:
+        if w_cnt > self.r_cnt:
 
             if w_cnt - self.r_cnt >= lbuff and self.show_overflow:
                 print("Interprocess buffer overflow.")
@@ -420,20 +424,25 @@ class RtsWindow(QtGui.QMainWindow):
             # Such calls are discarded.
             return
 
+        # The duration of one trace (s).
+        dt_trace = settings["nsamples"] / settings["samplerate"]
+
+        settings["lbuff"] = min(
+            max(round(self.max_delay / dt_trace), LBUFF_MIN), LBUFF_MAX)
+
         if (settings["samplerate"] != self.current_settings["samplerate"] 
             or settings["nsamples"] != self.current_settings["nsamples"]):
-
+            
             # Replace the current number of display averages with an appropriate
             # estimate for new parameters.
             
-            trace_acq_rate = settings["samplerate"] / settings["nsamples"]
+            # The acquisition rate in traces per second.
+            trace_acq_rate = 1 / dt_trace
 
             settings["navg_rt"] = max(
                 ceil(settings["samplerate"] / self.max_disp_samplerate),
                 ceil(trace_acq_rate / self.max_disp_rate)
             )
-
-            # TODO: update lbuff
 
         self.r_cnt = 0
         self.show_overflow = True
@@ -451,10 +460,10 @@ class RtsWindow(QtGui.QMainWindow):
 
             # Allocates buffers for interprocess communication. The frequency 
             # domain buffers are fully responsible for synchronization.
-            self.buff = [Array("d", nf_req, lock=True) for _ in range(self.lbuff)]
-            self.buff_acc = Array("d", nf_req, lock=False)  # TODO: add a lock here
+            self.buff = [Array("d", nf_req, lock=True) for _ in range(LBUFF_MAX)]
+            self.buff_acc = Array("d", nf_req, lock=False)
             self.buff_t = [Array("d", ns_req // TDSF, lock=False) 
-                           for _ in range(self.lbuff)]
+                           for _ in range(LBUFF_MAX)]
 
             self.pipe_conn, conn2 = Pipe()
 
@@ -628,7 +637,7 @@ def rts():
     # Same as app = QtGui.QApplication(*args) with optimum parameters
     app = mkQApp()
 
-    mw = RtsWindow()
+    mw = RtsWindow(basedir=r"D:\Sergey\Tmp\tmp Python\h5py")
     mw.show()
 
     QtGui.QApplication.instance().exec_()

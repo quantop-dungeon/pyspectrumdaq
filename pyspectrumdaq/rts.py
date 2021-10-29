@@ -19,10 +19,11 @@ from pyqtgraph import mkQApp
 from pyqtgraph.Qt import QtCore
 from pyqtgraph.Qt import QtGui
 
-from .rtsui import Ui_RtsWidget
+from rtsui import Ui_RtsWidget
+from trace_list import TraceList
 
-from .card import Card
-#from dummy_card import DummyCard as Card  #TODO: remove
+#from .card import Card
+from dummy_card import DummyCard as Card  #TODO: remove
 
 
 TDSF = 100  # The shrinking factor for time-domain data.
@@ -153,7 +154,8 @@ class RtsWindow(QtGui.QMainWindow):
 
     def __init__(self, card_args: Sequence = (), 
                  acq_settings: Union[dict, None] = None,
-                 fft_lims: tuple = (12, 24)) -> None:
+                 fft_lims: tuple = (12, 24),
+                 basedir: str = "") -> None:
         super().__init__()
 
         defaults = {"mode": "fifo_single",
@@ -168,7 +170,7 @@ class RtsWindow(QtGui.QMainWindow):
         if acq_settings:
             defaults.update(acq_settings)
 
-        self.setup_ui(card_args, defaults, fft_lims)
+        self.setup_ui(card_args, defaults, fft_lims, basedir)
 
         self.card_args = card_args
         self.current_settings = defaults
@@ -202,7 +204,6 @@ class RtsWindow(QtGui.QMainWindow):
         self.averging_now = False
 
         self.xfd = None
-        self.yfd_ref = None
         self.xtd = None
 
         # Creates a timer that will start a data acquisition process once 
@@ -214,10 +215,10 @@ class RtsWindow(QtGui.QMainWindow):
         self.updateTimer.timeout.connect(self.update_ui)
         self.updateTimer.start(0)
 
-    def setup_ui(self, card_args, card_settings, fft_lims) -> None:
+    def setup_ui(self, card_args, card_settings, fft_lims, basedir) -> None:
         """Sets up the user interface.
         """
-        self.setWindowTitle("Spectrum Analyzer")
+        self.setWindowTitle("Real-time spectrum analyzer")
         self.resize(1500, 800)
 
         self.ui = RtsWidget()
@@ -225,6 +226,8 @@ class RtsWindow(QtGui.QMainWindow):
         # Uses the widget stylesheet for the entire window.
 
         self.setCentralWidget(self.ui)
+
+        self.ui.basedirLineEdit.setText(basedir)
 
         self.ui.nsamplesComboBox.clear()
         for i in range(*fft_lims):
@@ -304,18 +307,16 @@ class RtsWindow(QtGui.QMainWindow):
 
         self.ui.averagePushButton.clicked.connect(self.start_averaging)
         self.ui.naveragesLineEdit.editingFinished.connect(self.set_navg)
-        self.ui.clearPushButton.clicked.connect(self.clear_ref)
 
-        # Creates the plot lines.
+        # Creates a trace list.
+        self.ui.traceListWidget.clear()
+        self.ref_list = TraceList(self.ui.traceListWidget,
+                                  self.ui.spectrumPlot,
+                                  self.ui.basedirLineEdit)
 
-        self.line = self.ui.spectrumPlot.plot()  # Real-time trace display.
-        self.line.setPen((250, 0, 0))
-
-        self.line_ref = self.ui.spectrumPlot.plot()  # Reference trace display.
-        self.line_ref.setPen((20, 20, 20))
-
-        self.line_td = self.ui.scopePlot.plot()  # Time domain display.
-        self.line_td.setPen((126, 47, 142))
+        # Creates plot lines for the real-time displays.
+        self.line = self.ui.spectrumPlot.plot(pen=(250, 0, 0))  # Spectrum.
+        self.line_td = self.ui.scopePlot.plot(pen=(3, 98, 160))  # Time domain.
 
         # Setting x and y ranges removes autoadjustment.
         self.ui.spectrumPlot.setXRange(0, card_settings["samplerate"] / 2)
@@ -327,7 +328,33 @@ class RtsWindow(QtGui.QMainWindow):
         del event  # Unused but required by the signature.
         self.stop_daq()
 
+    def keyPressEvent(self, event: QtGui.QKeyEvent):
+        """Defines what happens when the user presses a key. 
+        This is an overloaded Qt method.
+        """
+
+        if event.key() == QtCore.Qt.Key_Delete:
+
+            # Del - deletes the selected trace
+            self.ref_list.remove_selected()
+
+        elif event.modifiers() == QtCore.Qt.ControlModifier:
+            if event.key() == QtCore.Qt.Key_S:
+
+                # Ctrl+s - saves the current reference trace
+                fmt = self.ui.fileFormatComboBox.currentText()
+                self.ref_list.save_selected(fmt)
+
+            elif event.key() == QtCore.Qt.Key_X:
+
+                # Ctrl+x - toggles the visibility of the current trace
+                self.ref_list.toggle_visibility()
+
     def update_ui(self):
+        """The function executed periodically by the update timer to display
+        new data from the daq process.
+        """
+
         lbuff = len(self.buff)
         w_cnt = self.w_cnt.value  # The counter value of the writing process.
 
@@ -363,12 +390,21 @@ class RtsWindow(QtGui.QMainWindow):
                 ns = self.current_settings["nsamples"]
                 sr = self.current_settings["samplerate"]
 
-                # Acquires and displays a new reference trace.
-                self.yfd_ref = self.npbuff_acc / (navg_compl * ns * sr)
-                self.line_ref.setData(self.xfd, self.yfd_ref)
+                # Acquires and displays a new averaged trace.
+                yfd_avg = self.npbuff_acc / (navg_compl * ns * sr)
+
+                data = {"x": self.xfd.copy(), 
+                        "y": yfd_avg,
+                        "xlabel": "Frequency (Hz)",
+                        "ylabel": "PSD (V^2/Hz)",
+                        "n averages": navg_compl,
+                        "acquisition": self.current_settings.copy()}
+
+                self.ref_list.append(data, name=f"Ref{len(self.ref_list) + 1}")
 
     def update_daq(self) -> None:
-        """Starts data acquisition in a separate process with present settings.
+        """Starts data acquisition in a separate process or updates the settings
+        of an existing process.
         """
 
         settings = self.get_settings_from_ui()
@@ -470,7 +506,7 @@ class RtsWindow(QtGui.QMainWindow):
         self.ui.scopePlot.setYRange(-rng, rng)
 
     def stop_daq(self) -> None:
-        """Terminates the existing process."""
+        """Terminates the existing daq process."""
 
         if self.pipe_conn and self.daq_proc:
             self.pipe_conn.send("stop")
@@ -486,9 +522,6 @@ class RtsWindow(QtGui.QMainWindow):
     def get_settings_from_ui(self) -> dict:
         """ Gets card settings from the user interface. 
         """
-
-        # TODO: keep the total trace length above 10 us
-        # Keep the total flux of points to display below 3 Ms/sec.
 
         trig_mode = self.ui.trigmodeComboBox.currentData()
 
@@ -543,9 +576,6 @@ class RtsWindow(QtGui.QMainWindow):
     def set_navg(self):
         self.navg.value = int(self.ui.naveragesLineEdit.text())
 
-    def clear_ref(self):
-        self.line_ref.setData([], [])
-
 
 class RtsWidget(QtGui.QWidget, Ui_RtsWidget):
     """The widget that contains the user interface."""
@@ -583,14 +613,13 @@ class RtsWidget(QtGui.QWidget, Ui_RtsWidget):
         self.scopePlot.getAxis("top").setStyle(showValues=False)
         self.scopePlot.getAxis("right").setStyle(showValues=False) 
 
-
 def rts():
     """Starts a real-time spectrum analyzer."""
 
     # Same as app = QtGui.QApplication(*args) with optimum parameters
     app = mkQApp()
 
-    mw = RtsWindow()
+    mw = RtsWindow(basedir=r"D:\Sergey\Tmp\tmp Python\h5py")
     mw.show()
 
     QtGui.QApplication.instance().exec_()
@@ -658,7 +687,6 @@ def calc_abs_square_parallel(a, b):
     """The parallel implementation of calc_abs_square."""
     for i in prange(a.shape[0]):
         a[i] = abs(b[i] * b[i])
-
 
 
 if __name__ == '__main__':

@@ -23,7 +23,6 @@ from .rtsui import Ui_RtsWidget
 from .trace_list import TraceList
 
 from .card import Card
-#from dummy_card import DummyCard as Card  #TODO: remove
 
 
 TDSF = 100  # The shrinking factor for time-domain data.
@@ -214,7 +213,7 @@ class RtsWindow(QtGui.QMainWindow):
                     "samplerate": 30e6,
                     "nsamples": 2**19,
                     "trig_mode": "soft",
-                    "navg_rt": 3,
+                    "navg_rt": 0,
                     "lbuff": LBUFF_MAX}
 
         if acq_settings:
@@ -313,8 +312,8 @@ class RtsWindow(QtGui.QMainWindow):
             ind = uielem.findData(acq_settings["nsamples"])
             uielem.setCurrentIndex(ind)
 
-        with NoSignals(self.ui.navgrtLineEdit) as uielem:
-            uielem.setText("%i" % acq_settings["navg_rt"])
+        with NoSignals(self.ui.navgrtSpinBox) as uielem:
+            uielem.setValue(acq_settings["navg_rt"])
 
         ch = acq_settings["channels"][0]
 
@@ -353,7 +352,7 @@ class RtsWindow(QtGui.QMainWindow):
 
         self.ui.samplerateLineEdit.editingFinished.connect(self.update_daq)
         self.ui.nsamplesComboBox.currentIndexChanged.connect(self.update_daq)
-        self.ui.navgrtLineEdit.editingFinished.connect(self.update_daq)
+        self.ui.navgrtSpinBox.valueChanged.connect(self.update_daq)
 
         self.ui.averagePushButton.clicked.connect(self.start_averaging)
         self.ui.naveragesLineEdit.editingFinished.connect(self.update_navg)
@@ -476,7 +475,8 @@ class RtsWindow(QtGui.QMainWindow):
             max(round(self.max_delay / dt_trace), LBUFF_MIN), LBUFF_MAX)
 
         if (settings["samplerate"] != self.current_settings["samplerate"] 
-            or settings["nsamples"] != self.current_settings["nsamples"]):
+            or settings["nsamples"] != self.current_settings["nsamples"]
+            or not self.daq_proc):
             
             # Replace the current number of display averages with an appropriate
             # estimate for new parameters.
@@ -552,8 +552,8 @@ class RtsWindow(QtGui.QMainWindow):
             ind = uielem.findData(ns)
             uielem.setCurrentIndex(ind)
 
-        with NoSignals(self.ui.navgrtLineEdit) as uielem:
-            uielem.setText("%i" % settings["navg_rt"])
+        with NoSignals(self.ui.navgrtSpinBox) as uielem:
+            uielem.setValue(settings["navg_rt"])
 
         # Displays the spacing between the Fourier transform frequencies.
         df = (sr / ns)
@@ -605,7 +605,7 @@ class RtsWindow(QtGui.QMainWindow):
 
         samplerate = int(float(self.ui.samplerateLineEdit.text()))
         nsamples = self.ui.nsamplesComboBox.currentData()
-        navg_rt = int(float(self.ui.navgrtLineEdit.text()))
+        navg_rt = self.ui.navgrtSpinBox.value()
 
         # Updates the existing dictionary to preserve any settings that are not
         # represented in the UI but were supplied by the user.
@@ -674,6 +674,9 @@ class RtsWindow(QtGui.QMainWindow):
         vrms = 2 * self.current_settings["fullranges"][0] / 2**16
         lev = np.log10(vrms**2 / fmax)
         self.ui.spectrumPlot.setYRange(lev - 1, lev + 11)
+
+        sg = self.ui.scopePlot.getViewBox().screenGeometry()
+        self.ui.traceListWidget.setMaximumWidth(sg.width())
 
 
 class RtsWidget(QtGui.QWidget, Ui_RtsWidget):

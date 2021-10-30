@@ -1,4 +1,7 @@
 from typing import Union, Sequence
+
+import os
+
 from time import time
 from math import ceil
 
@@ -66,7 +69,9 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
 
             navg_rt = settings.pop("navg_rt")
             trig_mode = settings.pop("trig_mode")
-            lbuff = settings.pop("lbuff")  # The size of the interprocess buffer in traces.
+            lbuff = settings.pop("lbuff")  # The size of the interprocess buffer 
+                                           # in traces. It controls the maximum
+                                           # delay between the processes.
 
             adc.reset()
             
@@ -214,7 +219,7 @@ class RtsWindow(QtGui.QMainWindow):
                     "nsamples": 2**19,
                     "trig_mode": "soft",
                     "navg_rt": 0,
-                    "lbuff": LBUFF_MAX}
+                    "lbuff": None}
 
         if acq_settings:
             defaults.update(acq_settings)
@@ -267,6 +272,10 @@ class RtsWindow(QtGui.QMainWindow):
     def setup_ui(self, card_args, acq_settings, fft_lims, basedir) -> None:
         """Sets up the user interface.
         """
+
+        fn = os.path.join(os.path.dirname(__file__), "rsc", "psd_icon.png")
+        self.setWindowIcon(QtGui.QIcon(fn))
+
         self.setWindowTitle("Real-time spectrum analyzer")
         self.resize(1500, 800)
 
@@ -282,6 +291,9 @@ class RtsWindow(QtGui.QMainWindow):
         for i in range(*fft_lims):
             self.ui.nsamplesComboBox.addItem(f"{2**i:,}", 2**i)
 
+        # Connects to the card, reads the number of channels it has, and 
+        # gets the list of valid channel input ranges, which are required to
+        # initialize the corresponding controls.
         with Card(*card_args) as adc:
             nchannels = adc._nchannels
             valid_fullranges_mv = adc._valid_fullranges_mv
@@ -357,7 +369,7 @@ class RtsWindow(QtGui.QMainWindow):
         self.ui.averagePushButton.clicked.connect(self.start_averaging)
         self.ui.naveragesLineEdit.editingFinished.connect(self.update_navg)
 
-        # Creates a trace list.
+        # Creates a list that will store averaged reference traces.
         self.ui.traceListWidget.clear()
         self.ref_list = TraceList(self.ui.traceListWidget,
                                   self.ui.spectrumPlot,
@@ -365,7 +377,7 @@ class RtsWindow(QtGui.QMainWindow):
 
         # Creates plot lines for the real-time displays.
         self.line = self.ui.spectrumPlot.plot(pen=(250, 0, 0))  # Spectrum.
-        self.line_td = self.ui.scopePlot.plot(pen=(3, 98, 160))  # Time domain.
+        self.line_td = self.ui.scopePlot.plot(pen=(150, 150, 150))  # Time domain.
 
     def closeEvent(self, event):
         """Executed when the window is closed. This is an overloaded Qt method.
@@ -600,14 +612,17 @@ class RtsWindow(QtGui.QMainWindow):
             card_mode = "fifo_single"
 
         ch = self.ui.channelComboBox.currentData()
-        frng = self.ui.fullrangeComboBox.currentData() / 1000  # The item data is in mV.
         term = self.ui.terminationComboBox.currentData()
+
+        # The item data of fullrangeComboBox is in millivolts, 
+        # it needs to be converted to volts.
+        frng = self.ui.fullrangeComboBox.currentData() / 1000
 
         samplerate = int(float(self.ui.samplerateLineEdit.text()))
         nsamples = self.ui.nsamplesComboBox.currentData()
         navg_rt = self.ui.navgrtSpinBox.value()
 
-        # Updates the existing dictionary to preserve any settings that are not
+        # Updates the existing dictionary to preserve settings that are not
         # represented in the UI but were supplied by the user.
         new_settings = self.current_settings.copy()
 
@@ -675,14 +690,21 @@ class RtsWindow(QtGui.QMainWindow):
         lev = np.log10(vrms**2 / fmax)
         self.ui.spectrumPlot.setYRange(lev - 1, lev + 11)
 
+        # Makes the scope plot and the trace widget to be of the same width
+        # which makes them look nicer.
         sg = self.ui.scopePlot.getViewBox().screenGeometry()
         self.ui.traceListWidget.setMaximumWidth(sg.width())
 
 
 class RtsWidget(QtGui.QWidget, Ui_RtsWidget):
-    """The widget that contains the user interface."""
+    """The container widget that stores all user interface components 
+    but does not implement their main functionalities."""
 
     def __init__(self) -> None:
+        """Initializes the widget and does the setup that does not require
+        the knowledge of card parameters and acquisition settings.
+        """
+
         super().__init__()
         self.setupUi(self)
 
@@ -696,7 +718,11 @@ class RtsWidget(QtGui.QWidget, Ui_RtsWidget):
 
         self.spectrumPlot.setBackground("w")
         self.spectrumPlot.setClipToView(True)
-        self.spectrumPlot.setDownsampling(auto=True)  # If True, resample the data before plotting to avoid plotting multiple line segments per pixel.
+
+        # This setting turns on resampling the data before display to avoid 
+        # plotting multiple line segments per pixel.
+        self.spectrumPlot.setDownsampling(auto=True) 
+
         self.spectrumPlot.setLabel("left", "PSD", units="")
         self.spectrumPlot.setLabel("bottom", "Frequency", units="Hz")
         self.spectrumPlot.showAxis("right")
@@ -708,12 +734,14 @@ class RtsWidget(QtGui.QWidget, Ui_RtsWidget):
         self.spectrumPlot.plotItem.showGrid(True, True)
 
         self.scopePlot.setBackground("w")
+        self.scopePlot.setClipToView(True)
+        self.scopePlot.setDownsampling(auto=True) 
         self.scopePlot.setLabel("left", "Input", units="V")
         self.scopePlot.setLabel("bottom", "Time", units="s")
         self.scopePlot.showAxis("right")
         self.scopePlot.showAxis("top")
         self.scopePlot.getAxis("top").setStyle(showValues=False)
-        self.scopePlot.getAxis("right").setStyle(showValues=False) 
+        self.scopePlot.getAxis("right").setStyle(showValues=False)
 
 def rts(*args, **kwargs):
     """Starts a real-time spectrum analyzer."""
@@ -790,7 +818,3 @@ def calc_abs_square_parallel(a, b):
     """The parallel implementation of calc_abs_square."""
     for i in prange(a.shape[0]):
         a[i] = abs(b[i] * b[i])
-
-
-if __name__ == '__main__':
-    rts(basedir=r"D:\Sergey\Tmp\tmp Python\h5py")

@@ -128,12 +128,14 @@ class TraceList:
         r = self.listWidget.row(d["item"])
         self.listWidget.takeItem(r)
 
-        if r == len(self._list) - 1:
-            self._color_ind -= 1
-            # If it is the last element that is removed, 
-            # the color counter is decremented.
-
         self._list.pop(r)
+
+        if len(self._list) == 0:
+            # If the list contains no more items, the color counter is reset.
+            self._color_ind = 0
+        elif r == len(self._list):
+            # If the latest item was removed, the color counter is decremented.
+            self._color_ind -= 1
 
     def save_selected(self, fmt: str = "txt"):
         """Saves the currently selected trace."""

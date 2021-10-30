@@ -265,7 +265,7 @@ class RtsWindow(QtGui.QMainWindow):
         self.updateTimer.timeout.connect(self.update_ui)
         self.updateTimer.start(0)
 
-    def setup_ui(self, card_args, card_settings, fft_lims, basedir) -> None:
+    def setup_ui(self, card_args, acq_settings, fft_lims, basedir) -> None:
         """Sets up the user interface.
         """
         self.setWindowTitle("Real-time spectrum analyzer")
@@ -307,34 +307,34 @@ class RtsWindow(QtGui.QMainWindow):
         # Displays the current card settings.
 
         with NoSignals(self.ui.samplerateLineEdit) as uielem:
-            uielem.setText("%i" % card_settings["samplerate"])
+            uielem.setText("%i" % acq_settings["samplerate"])
 
         with NoSignals(self.ui.nsamplesComboBox) as uielem:
-            ind = uielem.findData(card_settings["nsamples"])
+            ind = uielem.findData(acq_settings["nsamples"])
             uielem.setCurrentIndex(ind)
 
         with NoSignals(self.ui.navgrtLineEdit) as uielem:
-            uielem.setText("%i" % card_settings["navg_rt"])
+            uielem.setText("%i" % acq_settings["navg_rt"])
 
-        ch = card_settings["channels"][0]
+        ch = acq_settings["channels"][0]
 
         with NoSignals(self.ui.channelComboBox) as uielem:
             uielem.setCurrentIndex(ch)
 
         with NoSignals(self.ui.fullrangeComboBox) as uielem:
-            fr_mv = int(1000 * card_settings["fullranges"][0])  # Full range in mV.
+            fr_mv = int(1000 * acq_settings["fullranges"][0])  # Full range in mV.
             ind = uielem.findData(fr_mv) 
             uielem.setCurrentIndex(ind)
             self.card_fullranges_mv[ch] = fr_mv
 
         with NoSignals(self.ui.terminationComboBox) as uielem:
-            term = card_settings["terminations"][0]
+            term = acq_settings["terminations"][0]
             ind = uielem.findData(term)
             uielem.setCurrentIndex(ind)
             self.card_terminations[ch] = term
 
         with NoSignals(self.ui.trigmodeComboBox) as uielem:
-            ind = uielem.findData(card_settings["trig_mode"])
+            ind = uielem.findData(acq_settings["trig_mode"])
             uielem.setCurrentIndex(ind)
 
         # Connects the control panel.
@@ -367,10 +367,6 @@ class RtsWindow(QtGui.QMainWindow):
         # Creates plot lines for the real-time displays.
         self.line = self.ui.spectrumPlot.plot(pen=(250, 0, 0))  # Spectrum.
         self.line_td = self.ui.scopePlot.plot(pen=(3, 98, 160))  # Time domain.
-
-        # Setting x and y ranges removes autoadjustment.
-        self.ui.spectrumPlot.setXRange(0, card_settings["samplerate"] / 2)
-        self.ui.spectrumPlot.setYRange(-12, 1)
 
     def closeEvent(self, event):
         """Executed when the window is closed. This is an overloaded Qt method.
@@ -567,8 +563,14 @@ class RtsWindow(QtGui.QMainWindow):
         self.xfd = np.arange(0, nf) * df
         
         rng = settings["fullranges"][0] 
-        self.xtd = np.linspace(0, nst / sr, nst)
-        self.ui.scopePlot.setXRange(0, nst / sr)
+        tmax = nst / sr
+        self.xtd = np.linspace(0, tmax, nst)
+
+        # Sets the interactive zoom limits.
+        self.ui.scopePlot.setLimits(xMin=-0.02*tmax, xMax=1.02*tmax)
+
+        # Sets the display range of the time domain plot.
+        self.ui.scopePlot.setXRange(0, tmax)
         self.ui.scopePlot.setYRange(-rng, rng)
 
     def stop_daq(self) -> None:
@@ -657,6 +659,22 @@ class RtsWindow(QtGui.QMainWindow):
         """
         self.navg.value = int(self.ui.naveragesLineEdit.text())
 
+    def show(self, *args, **kwargs) -> None:
+        """Calls `show` method of the base class and adjusts the scale of 
+        the spectrum plot.
+        """
+
+        super().show(*args, **kwargs)
+
+        # Sets the x range to the Nyquist frequency.
+        fmax = self.current_settings["samplerate"] / 2
+        self.ui.spectrumPlot.setXRange(0, fmax)
+
+        # Sets the y range based on the estimated digitalization noise.
+        vrms = 2 * self.current_settings["fullranges"][0] / 2**16
+        lev = np.log10(vrms**2 / fmax)
+        self.ui.spectrumPlot.setYRange(lev - 1, lev + 11)
+
 
 class RtsWidget(QtGui.QWidget, Ui_RtsWidget):
     """The widget that contains the user interface."""
@@ -687,7 +705,7 @@ class RtsWidget(QtGui.QWidget, Ui_RtsWidget):
         self.spectrumPlot.plotItem.showGrid(True, True)
 
         self.scopePlot.setBackground("w")
-        self.scopePlot.setLabel("left", "Signal", units="V")
+        self.scopePlot.setLabel("left", "Input", units="V")
         self.scopePlot.setLabel("bottom", "Time", units="s")
         self.scopePlot.showAxis("right")
         self.scopePlot.showAxis("top")

@@ -705,6 +705,10 @@ class RtsWidget(QtGui.QWidget, Ui_RtsWidget):
         the knowledge of card parameters and acquisition settings.
         """
 
+        # Adds a search path for the dropdown arrow icon. Note that
+        # the / separator is os-independent.
+        QtCore.QDir.addSearchPath("rsc", f"{os.path.dirname(__file__)}/rsc/")
+
         super().__init__()
         self.setupUi(self)
 

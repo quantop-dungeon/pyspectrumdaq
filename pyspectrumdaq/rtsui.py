@@ -42,6 +42,10 @@ class Ui_RtsWidget(object):
 "    border-top-right-radius: 5px;\n"
 "    border-bottom-right-radius: 5px;\n"
 "}\n"
+"QComboBox::down-arrow {\n"
+"    image: url(\"rsc:down_arrow.png\");\n"
+"    width: 8px;\n"
+"}\n"
 "QComboBox QAbstractItemView {\n"
 "    background-color: rgb(245, 245, 245);\n"
 "}\n"
@@ -53,7 +57,20 @@ class Ui_RtsWidget(object):
 "    border-color: rgb(0, 0, 0);\n"
 "    padding: 3px; \n"
 "    min-width: 70;\n"
-"}")
+"}\n"
+"\n"
+"QScrollBar:vertical {\n"
+"    border: none;\n"
+"    width: 15px;\n"
+" }\n"
+" QScrollBar::handle:vertical {\n"
+"    border: 1px solid black;\n"
+"    min-height: 20px;\n"
+"    background-color: rgb(245, 245, 245);\n"
+" }\n"
+"QScrollBar::add-line:vertical,  QScrollBar::sub-line:vertical {\n"
+"     height: 0px;\n"
+" }")
         self.verticalLayout = QtWidgets.QVBoxLayout(RtsWidget)
         self.verticalLayout.setObjectName("verticalLayout")
         self.gridLayout_3 = QtWidgets.QGridLayout()
@@ -106,8 +123,6 @@ class Ui_RtsWidget(object):
         self.nsamplesComboBox = QtWidgets.QComboBox(self.widget)
         self.nsamplesComboBox.setObjectName("nsamplesComboBox")
         self.nsamplesComboBox.addItem("")
-        self.nsamplesComboBox.addItem("")
-        self.nsamplesComboBox.addItem("")
         self.gridLayout.addWidget(self.nsamplesComboBox, 2, 1, 1, 1)
         self.terminationComboBox = QtWidgets.QComboBox(self.widget)
         self.terminationComboBox.setObjectName("terminationComboBox")
@@ -119,10 +134,6 @@ class Ui_RtsWidget(object):
         self.gridLayout.addWidget(self.label_2, 11, 0, 1, 1, QtCore.Qt.AlignRight)
         self.fullrangeComboBox = QtWidgets.QComboBox(self.widget)
         self.fullrangeComboBox.setObjectName("fullrangeComboBox")
-        self.fullrangeComboBox.addItem("")
-        self.fullrangeComboBox.addItem("")
-        self.fullrangeComboBox.addItem("")
-        self.fullrangeComboBox.addItem("")
         self.fullrangeComboBox.addItem("")
         self.fullrangeComboBox.addItem("")
         self.gridLayout.addWidget(self.fullrangeComboBox, 7, 1, 1, 1)
@@ -236,17 +247,11 @@ class Ui_RtsWidget(object):
         self.fileFormatComboBox.setItemText(0, _translate("RtsWidget", "hdf5"))
         self.fileFormatComboBox.setItemText(1, _translate("RtsWidget", "txt"))
         self.nsamplesComboBox.setItemText(0, _translate("RtsWidget", "2,048"))
-        self.nsamplesComboBox.setItemText(1, _translate("RtsWidget", "4,096"))
-        self.nsamplesComboBox.setItemText(2, _translate("RtsWidget", "8,192"))
         self.terminationComboBox.setItemText(0, _translate("RtsWidget", "1 MOhm"))
         self.terminationComboBox.setItemText(1, _translate("RtsWidget", "50 Ohm"))
         self.label_2.setText(_translate("RtsWidget", "N averages"))
-        self.fullrangeComboBox.setItemText(0, _translate("RtsWidget", "0.2"))
-        self.fullrangeComboBox.setItemText(1, _translate("RtsWidget", "0.5"))
-        self.fullrangeComboBox.setItemText(2, _translate("RtsWidget", "1"))
-        self.fullrangeComboBox.setItemText(3, _translate("RtsWidget", "2"))
-        self.fullrangeComboBox.setItemText(4, _translate("RtsWidget", "5"))
-        self.fullrangeComboBox.setItemText(5, _translate("RtsWidget", "10"))
+        self.fullrangeComboBox.setItemText(0, _translate("RtsWidget", "5"))
+        self.fullrangeComboBox.setItemText(1, _translate("RtsWidget", "10"))
         self.naveragesLineEdit.setText(_translate("RtsWidget", "100"))
         self.label.setText(_translate("RtsWidget", "Trigger"))
         self.traceListWidget.setToolTip(_translate("RtsWidget", "<html><head/><body><p>Ctr+s - save selected</p><p>Ctrl+x - hide/show trace </p><p>Del - delete selected</p></body></html>"))
@@ -271,6 +276,7 @@ class Ui_RtsWidget(object):
         self.channelComboBox.setItemText(3, _translate("RtsWidget", "3"))
         self.label_4.setText(_translate("RtsWidget", "Display averages"))
         self.nsamplesLabel.setText(_translate("RtsWidget", "N samples"))
+        self.rbwLabel.setToolTip(_translate("RtsWidget", "<html><head/><body><p>The spacing between the Fourier transform frequency bins.</p></body></html>"))
         self.rbwLabel.setText(_translate("RtsWidget", "700"))
         self.trigmodeComboBox.setItemText(0, _translate("RtsWidget", "Software"))
         self.trigmodeComboBox.setItemText(1, _translate("RtsWidget", "External"))

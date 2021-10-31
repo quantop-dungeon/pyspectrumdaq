@@ -42,6 +42,10 @@ QComboBox::drop-down {
     border-top-right-radius: 5px;
     border-bottom-right-radius: 5px;
 }
+QComboBox::down-arrow {
+    image: url(&quot;rsc:down_arrow.png&quot;);
+	width: 8px;
+}
 QComboBox QAbstractItemView {
     background-color: rgb(245, 245, 245);
 }
@@ -53,7 +57,20 @@ QPushButton {
     border-color: rgb(0, 0, 0);
     padding: 3px; 
 	min-width: 70;
-}</string>
+}
+
+QScrollBar:vertical {
+	border: none;
+	width: 15px;
+ }
+ QScrollBar::handle:vertical {
+	border: 1px solid black;
+	min-height: 20px;
+	background-color: rgb(245, 245, 245);
+ }
+QScrollBar::add-line:vertical,  QScrollBar::sub-line:vertical {
+ 	height: 0px;
+ }</string>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <item>
@@ -161,16 +178,6 @@ QPushButton {
               <string>2,048</string>
              </property>
             </item>
-            <item>
-             <property name="text">
-              <string>4,096</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string>8,192</string>
-             </property>
-            </item>
            </widget>
           </item>
           <item row="6" column="1">
@@ -196,26 +203,6 @@ QPushButton {
           </item>
           <item row="7" column="1">
            <widget class="QComboBox" name="fullrangeComboBox">
-            <item>
-             <property name="text">
-              <string>0.2</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string>0.5</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string>1</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string>2</string>
-             </property>
-            </item>
             <item>
              <property name="text">
               <string>5</string>

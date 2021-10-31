@@ -125,8 +125,7 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
             for data in adc.fifo():
                 a[:] = data[:, 0]
                 calc_fft()
-                calc_abs_square(y, b)
-                # Now there is a new absolute squared FFT stored in y.
+                calc_psd(y, b)
 
                 # Adds the trace to the accumulator buffer, which is independent of the fast averaging.
                 if navg_completed.value < navg.value:
@@ -809,26 +808,30 @@ def add_array_parallel(a, b):
         a[i] = a[i] + b[i]
 
 
-def calc_abs_square(a, b):
-    """a = abs(b * b)
-
-    Calculates absolute squares of the elements of a 1D array `b` and stores 
-    the result in `a`.
+def calc_psd(a, b):
+    """Calculated one-sided power spectral density from an FFT in `b` 
+    and stores the result in `a`.
+    
+    a[0] = abs(b[0] * b[0]),
+    a[i] = 2 * abs(b[i] * b[i]) if i > 0.
     """
     if a.shape[0] > 1e5:
         calc_abs_square_parallel(a, b)
     else:
         calc_abs_square_serial(a, b)
 
+    a[0] = a[0] / 2
+
+
 @njit
 def calc_abs_square_serial(a, b):
     """The serial implementation of calc_abs_square."""
     for i in range(a.shape[0]):
-        a[i] = abs(b[i] * b[i])
+        a[i] = 2 * abs(b[i] * b[i])
 
 
 @njit(parallel=True)
 def calc_abs_square_parallel(a, b):
     """The parallel implementation of calc_abs_square."""
     for i in prange(a.shape[0]):
-        a[i] = abs(b[i] * b[i])
+        a[i] = 2 * abs(b[i] * b[i])

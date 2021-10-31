@@ -37,7 +37,8 @@ COMM_POLL_INTVL = 0.5  # The period (in seconds) with which the data acquisition
                        # but it should also ensure a reasonably fast response 
                        # to user actions.
 
-RT_NOT_INTVL = 15  # (seconds)
+RT_NOTIF_INTVL = 15  # The notification interval (seconds) about the lag of data 
+                   # processing behind the real time.
 
 LBUFF_MIN = 2  # The minimum number of traces in the interprocess buffer.
                # It makes sense to set this number to 2 because, on the one 
@@ -104,7 +105,9 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
                 y = np.empty(nf, dtype=np.float64)
 
             j = 0  # The fast accumulation counter.
-            cnt.value = 0  # The number of acquired traces TODO: divided by navg_rt
+            cnt.value = 0  # The number of acquired traces, each of which 
+                           # is averaged over navg_rt.
+
             navg_completed.value = 0
 
             sr = adc.samplerate
@@ -115,8 +118,9 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
             # if polled too frequently, so we only do it once every
             # n_comm_poll * navg_rt traces.
 
-            start_time = time()
-            prev_not_time = start_time
+            tstart = time()
+            prev_not_time = tstart  # The last time of notification about
+                                        # the lag behind the real time.
 
             for data in adc.fifo():
                 a[:] = data[:, 0]
@@ -161,11 +165,17 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
 
                     if cnt.value % n_comm_poll == 0:
                         now = time()
-                        delay = (now - start_time) - navg_rt * cnt.value * dt_trace
+                        delay = (now - tstart) - navg_rt * cnt.value * dt_trace
 
-                        if delay > 0 and (now - prev_not_time) > RT_NOT_INTVL:
-                            # Prints how far it is from real-time prformance.
-                            print(f"The data reading is behind real time by (s): {delay}")
+                        if (trig_mode == "soft" 
+                            and (now - prev_not_time) > RT_NOTIF_INTVL):
+
+                            # Displays how far the data processing is from 
+                            # the real-time performance. This is only calculated 
+                            # if the trigger is software, because otherwise  
+                            # there are unknown triggering delays.
+
+                            print(f"Data acquisition delay (s): {delay}")
                             prev_not_time = now
 
                         if conn.poll():
@@ -254,7 +264,7 @@ class RtsWindow(QtGui.QMainWindow):
         self.buff_t = []  # List[Array]. The buffer for time-domain data.
         self.npbuff_t = []  # List[np.ndarray].
 
-        self.show_overflow = True
+        self.disp_buff_overflow = False
         self.averging_now = False
 
         self.xfd = None
@@ -417,9 +427,9 @@ class RtsWindow(QtGui.QMainWindow):
 
         if w_cnt > self.r_cnt:
 
-            if w_cnt - self.r_cnt >= lbuff and self.show_overflow:
-                print("Interprocess buffer overflow.")
-                self.show_overflow = False
+            if w_cnt - self.r_cnt >= lbuff and not self.disp_buff_overflow:
+                print("Some traces are not displayed.")
+                self.disp_buff_overflow = True
 
             i = self.r_cnt % lbuff
 
@@ -502,7 +512,7 @@ class RtsWindow(QtGui.QMainWindow):
             )
 
         self.r_cnt = 0
-        self.show_overflow = True
+        self.disp_buff_overflow = False
         self.averging_now = False
 
         # Calculates the required sizes of interprocess buffers.

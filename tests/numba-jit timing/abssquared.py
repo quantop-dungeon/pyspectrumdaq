@@ -9,6 +9,17 @@
 # Numba-jit-parallel-mem-alloc total time (s): 2.3881945610046387
 # Numpy total time (s): 10.97267746925354
 # FFT time (s): 47.9365873336792
+#
+#
+# ns = 2*10**3
+# nit = 100000
+#
+# Numba-jit-serial total time (s): 0.8354270458221436
+# Numba-jit-parallel total time (s): 9.508841514587402
+# Numba-jit-serial-mem-alloc total time (s): 0.7359964847564697
+# Numba-jit-parallel-mem-alloc total time (s): 9.258419752120972
+# Numpy total time (s): 1.1371526718139648
+# FFT time (s): 2.6162519454956055
 
 import time
 

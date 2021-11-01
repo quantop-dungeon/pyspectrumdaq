@@ -1,4 +1,4 @@
-from typing import Generator, Sequence
+from typing import Generator, Sequence, Union
 
 from ctypes import byref
 from ctypes import c_void_p
@@ -82,9 +82,7 @@ class Card:
         self._nsamples = 0  # The number of samples per channel per trace.
 
         self._pvBuffer = None  # A handle to a buffer for DMA data transfer.
-        self._buffer = None    # A handle to the same buffer as a numpy array.
-        self._nbufftraces = 0  # The size of the buffer in traces.
-        self._trace_bsize = 0  # The size of each trace in bytes.
+        self._buffer = []  # The same buffer as a list of numpy array.
 
         # The factors for converting between ADC values and voltages
         # (for all channels, not the ones that are enabled).
@@ -150,6 +148,12 @@ class Card:
         """Closes the connection to the card."""
         sp.spcm_vClose(self._hCard)
 
+        # After the connection is closed, the card object is useless, 
+        # while it may still hold references to a substantial memory buffer.
+        # This buffer is freed here.
+        del self._pvBuffer
+        del self._buffer
+
     def reset(self) -> None:
         """Resets the card to default settings."""
         self.set32(sp.SPC_M2CMD, sp.M2CMD_CARD_RESET)
@@ -164,8 +168,6 @@ class Card:
     def __exit__(self, *a):
         """Closes the card connection and frees the memory buffer."""
         self.close()
-        del self._pvBuffer
-        del self._buffer
 
     def set_acquisition(self,
                         mode: str = "std_single",
@@ -175,13 +177,15 @@ class Card:
                         samplerate: int = 30e6,
                         nsamples: int = 300e3,
                         timeout: float = 10,
+                        clock: str = "int",
+                        ext_clock_freq: Union[int, None] = None,
                         pretrig_ratio: float = 0) -> None:
         """Sets acquisition parameters and initializes an appropriate buffer
         for data transfer.
 
         Args:
             mode: 
-                The card mode. Can take one of the following values:
+                The acquisition mode. Can take one of the following values:
                 'std_single'  - A single data segment is acquired for a single 
                 trigger;
                 'fifo_single' - The specified number (maybe infinite) of
@@ -190,30 +194,43 @@ class Card:
                 'fifo_multi'  - The specified number (maybe infinite) of 
                 segments are acquired each after its own trigger event.
             channels:
-                Specify channel number as e.g. 0, 1, 2 or 3.
+                A list of enabled channels, e.g. [0, 2]. The channel enumeration 
+                starts from zero. 
             fullranges:
-                The fullranges of channels in V. Have to be one of 
+                The fullranges of the channels in Volts. Have to be one of 
                 {0.2, 0.5, 1, 2, 5, 10}.
             terminations:
-                The channel terminations, can be '50' (50 Ohm) or '1M' (1 MOhm).
+                The terminations of the channels, can be '50' (meaning 50 Ohm) 
+                or '1M' (meaning 1 MOhm).
             samplerate: 
-                The sample rate in Hz.
+                The sampling rate in Hz.
             nsamples:
                 The number of samples per channel per data trace.
             timeout: 
                 The timeout in s.
+            clock:
+                The clock source. Can be 'int' ('internal') or 'ext' 
+                ('external'). In the external mode, the external clock frequency 
+                must also be specified.
+            ext_clock_freq:
+                The external clock frequency in Hertz. Ignored if the clock is 
+                set to internal.
             pretrig_ratio:
                 The fraction of samples in a trace that is recorded prior to 
                 the trigger edge. 
         """
 
+        mode = mode.lower()
         nsamples = int(nsamples)
         samplerate = int(samplerate)
-        mode = mode.lower()
+        clock = clock.lower()
 
         # Enables and configures the specified channels and sets the card mode.
         self._set_channels(channels, terminations, fullranges)
-        self._set_card_mode(mode)
+        
+        # Sets the card mode.
+        self.set32(sp.SPC_CARDMODE, getattr(sp, "SPC_REC_%s" % mode.upper()))
+        self._card_mode = mode
 
         if mode == "std_single":
 
@@ -254,15 +271,30 @@ class Card:
 
         self._nsamples = nsamples
 
-        # Sets the sampling rate and reads it back, because the card can round 
-        # this number without giving an error.
+        # Sets the clock source before setting the sampling rate.
+        if clock.startswith("int"):
+
+            # Internal clock.
+            self.set32(sp.SPC_CLOCKMODE, sp.SPC_CM_INTPLL)
+        elif clock.startswith("ext"):
+
+            # External clock.
+            self.set32(sp.SPC_REFERENCECLOCK, int(ext_clock_freq))
+            self.set32(sp.SPC_CLOCKMODE, sp.SPC_CM_EXTREFCLOCK)
+        else:
+            raise ValueError("The clock mode must be 'int' or 'ext', "
+                             f"not {clock!r}")
+
+        # Sets the sampling rate and reads it back, because the card can adjust 
+        # this number based on the clock frequency without giving an error.
         self.set64(sp.SPC_SAMPLERATE, samplerate)
         self._samplerate = self.get64(sp.SPC_SAMPLERATE)
 
         # Sets the number of samples to be acquired after the trigger,
-        # it should be a multiple of 4 and minimum 4. This value is ignored
-        # in fifo_single mode.  
-        posttrig = max(4 * round(nsamples * (1. - pretrig_ratio) / 4), 4)
+        # it should be a multiple of 4 minimum 4, and maximum nsamples-4.
+        # This value is ignored in fifo_single mode.  
+        posttrig = max(4 * round(nsamples * (1. - pretrig_ratio) / 4) - 4, 4)
+        posttrig = min(posttrig, nsamples-4)
         self.set64(sp.SPC_POSTTRIGGER, posttrig)
 
         if nsamples / samplerate > timeout:
@@ -273,7 +305,7 @@ class Card:
         # Sets the timeout value after converting it to milliseconds.
         self.set32(sp.SPC_TIMEOUT, int(timeout * 1e3))
 
-        # Creates an appropriate buffer for DMA transfer.
+        # Creates a memory buffer for DMA transfer.
         self._create_buffer(len(channels), nsamples, mode)
 
     def set_trigger(self, mode: str = "soft", channel: int = 0,
@@ -384,11 +416,13 @@ class Card:
             raise RuntimeError("The card has to be configured for std_single "
                                "mode.")
 
+        trace_nbytes = self._buffer[0].nbytes
+
         # Defines DMA transfer with a notification when all data is received. 
         # This has to be done for every acquisition.
         err = sp.spcm_dwDefTransfer_i64(self._hCard, sp.SPCM_BUF_DATA,
                                         sp.SPCM_DIR_CARDTOPC, 0,
-                                        self._pvBuffer, 0, self._trace_bsize)
+                                        self._pvBuffer, 0, trace_nbytes)
 
         if err != sp.ERR_OK:
             raise CardError(self.get_error_info())
@@ -403,18 +437,21 @@ class Card:
             # Converts the data to voltage readings.
             cfs = tuple(self._conversions[n] for n in self._acq_channels)
             dim = (self._nsamples, len(self._acq_channels))
-            data = np.zeros(dim, dtype=np.float64)
-            _convert(data, self._buffer, cfs)
+            data = np.empty(dim, dtype=np.float64)
+            _convert(data, self._buffer[0], cfs)
         else:
             # Takes a copy because the buffer can be overwritten by a next DMA.
-            data = self._buffer.copy()
+            data = self._buffer[0].copy()
 
         return data
 
-    def fifo(self, convert: bool = True) -> Generator:
+    def fifo(self, n: int = 0, convert: bool = True) -> Generator:
         """Acquires one trace without time axis in FIFO mode.
 
         Args:
+            n:
+                The number of traces to acquire after which the FIFO stops. 
+                Zero corresponds to indefinite acquisition.  
             convert:
                 Specifies if the data should be converted to voltages (True) 
                 or returned directly as ADC readings (False). ADC readings can 
@@ -430,22 +467,25 @@ class Card:
             raise RuntimeError("The card has to be configured for fifo_single "
                                "or fifo_multi mode.")
 
-        # Defines data transfer with a notification for every new trace.
-        buff_size = self._nbufftraces * self._trace_bsize
-        notify_size = self._trace_bsize
-        err = sp.spcm_dwDefTransfer_i64(self._hCard, sp.SPCM_BUF_DATA,
-                                        sp.SPCM_DIR_CARDTOPC, notify_size,
-                                        self._pvBuffer, 0, buff_size)
-
-        if err != sp.ERR_OK:
-            raise CardError(self.get_error_info())
-
         # Shorthand notations.
         ns = self._nsamples
         nchannels = len(self._acq_channels)
         cfs = tuple(self._conversions[n] for n in self._acq_channels)
 
-        i = 0  # Initializes the buffer segment counter.
+        nbufftraces = len(self._buffer)
+        trace_nbytes = self._buffer[0].nbytes
+
+        buff_nbytes = nbufftraces * trace_nbytes
+        notify_nbytes = trace_nbytes
+
+        # Defines data transfer with a notification for every new trace.
+        err = sp.spcm_dwDefTransfer_i64(self._hCard, sp.SPCM_BUF_DATA,
+                                        sp.SPCM_DIR_CARDTOPC, notify_nbytes,
+                                        self._pvBuffer, 0, buff_nbytes)
+        if err != sp.ERR_OK:
+            raise CardError(self.get_error_info())
+
+        cnt = 0  # Init a trace counter.
 
         # Starts the card, enables the trigger, starts data transfer 
         # and waits for the first segment of data to arrive.
@@ -454,44 +494,29 @@ class Card:
         self.set32(sp.SPC_M2CMD, start_cmd)
 
         while True:
+            i = cnt % nbufftraces  # The buffer segment counter.
+
             if convert:
                 # Converts the data to voltage readings.
-                data = np.zeros((ns, nchannels), dtype=np.float64)
-                _convert(data, self._buffer[i * ns: (i + 1) * ns, :], cfs)
+                data = np.empty((ns, nchannels), dtype=np.float64)
+                _convert(data, self._buffer[i], cfs)
             else:
                 # Takes a copy because the buffer can be overwritten.
-                data = self._buffer[i * ns: (i + 1) * ns, :].copy()
+                data = self._buffer[i].copy()
 
             # Notifies that some space in the buffer is free for writing again.
-            self.set64(sp.SPC_DATA_AVAIL_CARD_LEN, self._trace_bsize)
+            self.set64(sp.SPC_DATA_AVAIL_CARD_LEN, trace_nbytes)
 
             yield data
 
+            cnt += 1
+
+            if n and cnt == n:
+                self.stop()
+                break
+
             # Waits for a new segment of data in the buffer.
             self.set32(sp.SPC_M2CMD, sp.M2CMD_DATA_WAITDMA)
-
-            # Increments the segment counter in a circular manner.
-            i += 1
-            if i >= self._nbufftraces:
-                i = 0
-
-    def set_clock(self, mode: str = "int", ext_freq: int = 10000000) -> None:
-        """Sets the clock mode, which can be internal ('int') or 
-        external ('ext'). For external mode, an external clock frequency 
-        must be specified (in Hertz).
-        """
-
-        mode = mode.lower()  # The argument is case-insensitive.
-
-        if mode.startswith("int"):
-            self.set32(sp.SPC_CLOCKMODE, sp.SPC_CM_INTPLL)  # Internal clock.
-        elif mode.startswith("ext"):
-            # Sets the clock to external reference.
-            self.set32(sp.SPC_REFERENCECLOCK, int(ext_freq))
-            self.set32(sp.SPC_CLOCKMODE, sp.SPC_CM_EXTREFCLOCK)
-        else:
-            raise ValueError(f"The clock mode must be 'int' or 'ext', "
-                             f"not {mode!r}")
 
     @property
     def samplerate(self):
@@ -500,27 +525,12 @@ class Card:
         """
         return self._samplerate
 
-    def _set_card_mode(self, mode: str) -> None:
-        """Sets the card mode. The valid values are:
-
-        'std_single', 'std_multi', 'std_gate', 'std_aba',
-        'fifo_single', 'fifo_multi', 'fifo_gate', 'fifo_aba'
-
-        The argument is case-insensitive.
+    @property
+    def nsamples(self):
+        """The number of samples per channel in one trace. The value of 
+        this property is set using `set_acquisition`.
         """
-
-        # Checks the consistency of the argument value.
-        mode = mode.lower()
-        valid_modes = ['std_single', 'std_multi', 'std_gate', 'std_aba',
-                       'fifo_single', 'fifo_multi', 'fifo_gate', 'fifo_aba']
-        if mode not in valid_modes:
-            raise ValueError(f"The mode must be one of the "
-                             f"following: {valid_modes}, not {mode!r}.")
-
-        # Sets the card mode.
-        mode_val = getattr(sp, "SPC_REC_%s" % mode.upper())
-        self.set32(sp.SPC_CARDMODE, mode_val)
-        self._card_mode = mode
+        return self._nsamples
 
     def _set_channels(self,
                       channels: Sequence = (1,),
@@ -600,7 +610,7 @@ class Card:
                 The card mode. 
         """
 
-        trace_bsize = 2 * nsamples * nchannels  # The trace size in bytes.
+        trace_nbytes = 2 * nsamples * nchannels  # The trace size in bytes.
 
         # Tries getting a continuous buffer. This is only expected to work
         # if an external pre-setup has been done as described in the manual.
@@ -612,11 +622,11 @@ class Card:
         if err != sp.ERR_OK:
             raise CardError(self.get_error_info())
 
-        if qwContBufLen.value >= trace_bsize:
+        if qwContBufLen.value >= trace_nbytes:
             print("Using a continuous buffer.")
 
             # Rounds the size of the buffer to an integer number of traces.
-            nbufftraces = qwContBufLen.value // trace_bsize
+            nbufftraces = qwContBufLen.value // trace_nbytes
         else:
             # Creates a regular buffer.
 
@@ -624,7 +634,7 @@ class Card:
             card_mem_lim = self.get64(sp.SPC_PCIMEMSIZE)
 
             if mode == "fifo_single" or mode == "fifo_multi":
-                nbufftraces = max((card_mem_lim // trace_bsize), 1)
+                nbufftraces = max((card_mem_lim // trace_nbytes), 1)
 
                 # In FIFO modes, data acquisition can proceed indefinitely.
                 # On the card side, all its memory can be used as a buffer.
@@ -635,25 +645,15 @@ class Card:
             else:
                 raise ValueError(f"Invalid card mode {mode}.")
 
-            self._pvBuffer = sp.create_string_buffer(trace_bsize * nbufftraces)
+            self._pvBuffer = sp.create_string_buffer(trace_nbytes * nbufftraces)
             print("Using a regular buffer.")
 
-        self._nbufftraces = nbufftraces
-        self._trace_bsize = trace_bsize
-
-        # For the convenience of access, we also represent the allocated buffer
-        # as a 2D numpy array of 16 bit integers.
-        arr = np.frombuffer(self._pvBuffer, dtype=np.int16)
-        self._buffer = np.reshape(arr, (nbufftraces * nsamples, nchannels))
-
-        # Another way of recasting the buffer is given below. It works, but 
-        # causes memory leak: after del self._buffer and del self._pvBuffer, 
-        # the memory they point to is not freed. Apparently, ctypes.cast is
-        # the culprit, see https://stackoverflow.com/questions/61479041/ctypes-does-not-free-string-buffers
-        #
-        # pnData = cast(self._pvBuffer, sp.ptr16)
-        # dim = (nbufftraces * nsamples, nchannels)
-        # self._buffer = np.ctypeslib.as_array(pnData, shape=dim)
+        # Represents the buffer as a list of arrays each sized for one trace.
+        self._buffer = [np.ndarray((nsamples, nchannels), 
+                                   dtype=np.int16, 
+                                   buffer=self._pvBuffer, 
+                                   offset=i * trace_nbytes) 
+                        for i in range(nbufftraces)]
 
 
 class CardError(Exception):
@@ -705,7 +705,6 @@ def szTypeToName(lCardType: int) -> str:
     return name
 
 
-@numba.jit(nopython=True, parallel=True)
 def _convert(dst, src, scalefs):
     """Converts a 2D integer numpy array (nsamples, nchanels) into a 2D float64 
     numpy array using the specified scaling factors for the channels. 
@@ -716,6 +715,24 @@ def _convert(dst, src, scalefs):
         src: Source array.
         scalefs: A list of scaling factors for the channels.
     """
+
+    if dst.shape[1] > 1 and dst.shape[0] > 1e5:
+        _convert_parallel(dst, src, scalefs)
+    else:
+        _convert_serial(dst, src, scalefs)
+
+
+@numba.njit
+def _convert_serial(dst, src, scalefs):
+    """The serial implementation of _convert."""
+    for ch in range(dst.shape[1]):
+        for n in range(dst.shape[0]):
+            dst[n, ch] = src[n, ch] * scalefs[ch]
+
+
+@numba.njit(parallel=True)
+def _convert_parallel(dst, src, scalefs):
+    """The parallel implementation of _convert."""
     for ch in numba.prange(dst.shape[1]):
-        for n in numba.prange(dst.shape[0]):
+        for n in range(dst.shape[0]):
             dst[n, ch] = src[n, ch] * scalefs[ch]

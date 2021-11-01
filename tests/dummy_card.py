@@ -1,6 +1,6 @@
 import time
 
-from numpy import dtype
+import numpy as np
 from numpy.random import random
 
 class DummyCard:
@@ -18,10 +18,30 @@ class DummyCard:
     def __exit__(self, *a):
         pass
 
+    def reset(self):
+        pass
+
+    def close(self):
+        pass
+
     def set_acquisition(self, **kwargs):
-        self.samplerate = int(kwargs["samplerate"])
+        samplerate = int(kwargs["samplerate"])
         self.nchannels = len(kwargs["channels"])
-        self.nsamples = int(kwargs["nsamples"])
+        
+        nsamples = int(kwargs["nsamples"])
+
+        if nsamples % 2048 != 0:
+            nsamples = max(2048 * round(nsamples / 2048), 2048)
+            print(f"The number of samples was changed to {nsamples} because"
+                    " this number has to be divisible by 2048 in FIFO modes.")
+
+        if samplerate % 2048 != 0:
+            samplerate = max(2048 * round(samplerate / 2048), 2048)
+            print(f"The samplerate was changed to {samplerate} because"
+                    " this number has to be divisible by 2048 in dummy modes.")
+
+        self.samplerate = samplerate
+        self.nsamples = nsamples
 
         print("Acquisition settings:")
         print(kwargs)
@@ -31,18 +51,23 @@ class DummyCard:
         print(args)
         print(kwargs)
 
-    def fifo(self, convert=True):
+    def fifo(self, n=0, convert=True):
         """Generates random traces while emulating the delays of real-time data 
         acquisition by the card."""
 
-        # The sampling time of one trace (seconds).
-        dt_trace = self.nsamples / self.samplerate
+        ns = self.nsamples
+        sr = self.samplerate
+
+        dt_trace = ns / sr  # The sampling time of one trace (seconds).
 
         cnt = 0  # The trace counter.
 
         start_time = time.time()
         while True:
-            data = random((self.nsamples, self.nchannels))
+
+            # The output is a white noise process.
+            data = (random((ns, self.nchannels)) - 0.5) * np.sqrt(sr / 30e6)
+
             cnt += 1
 
             now = time.time()

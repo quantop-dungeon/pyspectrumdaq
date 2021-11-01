@@ -25,8 +25,8 @@ from pyqtgraph.Qt import QtGui
 from .rtsui import Ui_RtsWidget
 from .trace_list import TraceList
 
-from .card import Card
-#from dummy_card import DummyCard as Card
+#from .card import Card
+from dummy_card import DummyCard as Card
 
 
 TDSF = 100  # The shrinking factor for time-domain data.
@@ -69,6 +69,7 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
 
             settings = msg
 
+            is_window = (settings.pop("window") == "Hann")
             navg_rt = settings.pop("navg_rt")
             trig_mode = settings.pop("trig_mode")
             lbuff = settings.pop("lbuff")  # The size of the interprocess buffer 
@@ -104,6 +105,10 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
                 # A buffer to store absolute squared spectra.
                 y = np.empty(nf, dtype=np.float64)
 
+                # The Hann window function w[n] = sin(pi*n/N)^2.
+                w = np.sin(np.linspace(0, np.pi, ns, endpoint=False)) ** 2
+                w = w * np.sqrt(8 / 3)
+
             j = 0  # The fast accumulation counter.
             cnt.value = 0  # The number of acquired traces, each of which 
                            # is averaged over navg_rt.
@@ -115,15 +120,19 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
 
             n_comm_poll = max(int(COMM_POLL_INTVL / dt_trace / navg_rt), 1)
             # Polling the connection is time consuming, and also it breaks 
-            # if polled too frequently, so we only do it once every
+            # if polled too frequently, so we only poll once every
             # n_comm_poll * navg_rt traces.
 
             tstart = time()
             prev_not_time = tstart  # The last time of notification about
-                                        # the lag behind the real time.
+                                    # the lag behind the real time.
 
             for data in adc.fifo():
                 a[:] = data[:, 0]
+
+                if is_window:
+                    mult_array(a, w)
+
                 calc_fft()
                 calc_psd(y, b)
 
@@ -228,7 +237,8 @@ class RtsWindow(QtGui.QMainWindow):
                     "nsamples": 2**19,
                     "trig_mode": "soft",
                     "navg_rt": 0,
-                    "lbuff": None}
+                    "lbuff": None,
+                    "window": "Hann"}
 
         if acq_settings:
             defaults.update(acq_settings)
@@ -286,7 +296,7 @@ class RtsWindow(QtGui.QMainWindow):
         fn = os.path.join(os.path.dirname(__file__), "rsc", "psd_icon.png")
         self.setWindowIcon(QtGui.QIcon(fn))
 
-        self.setWindowTitle("Real-time spectrum analyzer")
+        self.setWindowTitle("Spectrum analyzer")
         self.resize(1500, 800)
 
         self.ui = RtsWidget()
@@ -337,6 +347,10 @@ class RtsWindow(QtGui.QMainWindow):
         with NoSignals(self.ui.navgrtSpinBox) as uielem:
             uielem.setValue(acq_settings["navg_rt"])
 
+        with NoSignals(self.ui.psdwindowComboBox) as uielem:
+            ind = uielem.findText(acq_settings["window"])
+            uielem.setCurrentIndex(ind)
+
         ch = acq_settings["channels"][0]
 
         with NoSignals(self.ui.channelComboBox) as uielem:
@@ -375,6 +389,7 @@ class RtsWindow(QtGui.QMainWindow):
         self.ui.samplerateLineEdit.editingFinished.connect(self.update_daq)
         self.ui.nsamplesComboBox.currentIndexChanged.connect(self.update_daq)
         self.ui.navgrtSpinBox.valueChanged.connect(self.update_daq)
+        self.ui.psdwindowComboBox.currentIndexChanged.connect(self.update_daq)
 
         self.ui.averagePushButton.clicked.connect(self.start_averaging)
         self.ui.naveragesLineEdit.editingFinished.connect(self.update_navg)
@@ -628,6 +643,7 @@ class RtsWindow(QtGui.QMainWindow):
         samplerate = int(float(self.ui.samplerateLineEdit.text()))
         nsamples = self.ui.nsamplesComboBox.currentData()
         navg_rt = self.ui.navgrtSpinBox.value()
+        window = self.ui.psdwindowComboBox.currentText()
 
         # Updates the existing dictionary to preserve settings that are not
         # represented in the UI but were supplied by the user.
@@ -640,7 +656,8 @@ class RtsWindow(QtGui.QMainWindow):
                              "samplerate": samplerate,
                              "nsamples": nsamples,
                              "trig_mode": trig_mode,
-                             "navg_rt": navg_rt})
+                             "navg_rt": navg_rt,
+                             "window": window})
 
         return new_settings
 
@@ -806,30 +823,26 @@ def add_array_parallel(a, b):
         a[i] = a[i] + b[i]
 
 
+@njit
 def calc_psd(a, b):
     """Calculated one-sided power spectral density from an FFT in `b` 
     and stores the result in `a`.
     
-    a[0] = abs(b[0] * b[0]),
-    a[i] = 2 * abs(b[i] * b[i]) if i > 0.
+    a[0] = abs(b[0])**2,
+    a[i] = 2*abs(b[i])**2  if  i > 0.
     """
-    if a.shape[0] > 1e5:
-        calc_abs_square_parallel(a, b)
-    else:
-        calc_abs_square_serial(a, b)
-
-    a[0] = a[0] / 2
+    for i in range(a.shape[0]):
+        a[i] = 2 * (b[i].real ** 2 + b[i].imag ** 2)
+    
+    a[0] = b[0].real ** 2 + b[0].imag ** 2
 
 
 @njit
-def calc_abs_square_serial(a, b):
-    """The serial implementation of calc_abs_square."""
+def mult_array(a, b):
+    """a = a * b 
+
+    Multiplies two 1D arrays `b` and `a` element-wise and stores the result 
+    in `a`.
+    """
     for i in range(a.shape[0]):
-        a[i] = 2 * abs(b[i] * b[i])
-
-
-@njit(parallel=True)
-def calc_abs_square_parallel(a, b):
-    """The parallel implementation of calc_abs_square."""
-    for i in prange(a.shape[0]):
-        a[i] = 2 * abs(b[i] * b[i])
+        a[i] = a[i] * b[i]

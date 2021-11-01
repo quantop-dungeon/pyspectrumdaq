@@ -174,33 +174,63 @@ QScrollBar::add-line:vertical,  QScrollBar::sub-line:vertical {
           <property name="spacing">
            <number>7</number>
           </property>
-          <item row="2" column="1">
-           <widget class="QComboBox" name="nsamplesComboBox">
-            <item>
-             <property name="text">
-              <string>2,048</string>
-             </property>
-            </item>
-           </widget>
-          </item>
-          <item row="6" column="1">
-           <widget class="QComboBox" name="terminationComboBox">
-            <item>
-             <property name="text">
-              <string>1 MOhm</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string>50 Ohm</string>
-             </property>
-            </item>
-           </widget>
-          </item>
-          <item row="11" column="0" alignment="Qt::AlignRight">
-           <widget class="QLabel" name="label_2">
+          <item row="7" column="0" alignment="Qt::AlignRight">
+           <widget class="QLabel" name="fullrangeLabel">
             <property name="text">
-             <string>N averages</string>
+             <string>Full range (V)</string>
+            </property>
+           </widget>
+          </item>
+          <item row="12" column="0" alignment="Qt::AlignRight">
+           <widget class="QLabel" name="label_3">
+            <property name="text">
+             <string>Completed</string>
+            </property>
+           </widget>
+          </item>
+          <item row="15" column="1">
+           <spacer name="verticalSpacer_3">
+            <property name="orientation">
+             <enum>Qt::Vertical</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>20</width>
+              <height>40</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item row="9" column="1">
+           <widget class="QComboBox" name="trigmodeComboBox">
+            <property name="maximumSize">
+             <size>
+              <width>100</width>
+              <height>16777215</height>
+             </size>
+            </property>
+            <item>
+             <property name="text">
+              <string>Software</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>External</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QLineEdit" name="samplerateLineEdit">
+            <property name="maximumSize">
+             <size>
+              <width>100</width>
+              <height>16777215</height>
+             </size>
+            </property>
+            <property name="text">
+             <string>30e6</string>
             </property>
            </widget>
           </item>
@@ -218,65 +248,31 @@ QScrollBar::add-line:vertical,  QScrollBar::sub-line:vertical {
             </item>
            </widget>
           </item>
-          <item row="11" column="1">
-           <widget class="QLineEdit" name="naveragesLineEdit">
-            <property name="sizePolicy">
-             <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-              <horstretch>0</horstretch>
-              <verstretch>0</verstretch>
-             </sizepolicy>
-            </property>
-            <property name="maximumSize">
-             <size>
-              <width>100</width>
-              <height>16777215</height>
-             </size>
-            </property>
+          <item row="5" column="0" alignment="Qt::AlignRight">
+           <widget class="QLabel" name="channelLabel">
             <property name="text">
-             <string>100</string>
+             <string>Channel</string>
             </property>
            </widget>
           </item>
-          <item row="9" column="0" alignment="Qt::AlignRight">
-           <widget class="QLabel" name="label">
-            <property name="text">
-             <string>Trigger</string>
-            </property>
-           </widget>
-          </item>
-          <item row="14" column="0" colspan="2" alignment="Qt::AlignRight">
-           <widget class="QListWidget" name="traceListWidget">
-            <property name="toolTip">
-             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Ctr+s - save selected&lt;/p&gt;&lt;p&gt;Ctrl+x - hide/show trace &lt;/p&gt;&lt;p&gt;Del - delete selected&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-            </property>
+          <item row="6" column="1">
+           <widget class="QComboBox" name="terminationComboBox">
             <item>
              <property name="text">
-              <string>Trace 1</string>
+              <string>1 MOhm</string>
              </property>
             </item>
             <item>
              <property name="text">
-              <string>Background</string>
-             </property>
-            </item>
-            <item>
-             <property name="text">
-              <string>Background without input</string>
+              <string>50 Ohm</string>
              </property>
             </item>
            </widget>
           </item>
-          <item row="1" column="0" alignment="Qt::AlignRight">
-           <widget class="QLabel" name="samplerateLabel">
+          <item row="2" column="0" alignment="Qt::AlignRight">
+           <widget class="QLabel" name="nsamplesLabel">
             <property name="text">
-             <string>Sampling rate (Hz)</string>
-            </property>
-           </widget>
-          </item>
-          <item row="7" column="0" alignment="Qt::AlignRight">
-           <widget class="QLabel" name="fullrangeLabel">
-            <property name="text">
-             <string>Full range (V)</string>
+             <string>N samples</string>
             </property>
            </widget>
           </item>
@@ -296,10 +292,10 @@ QScrollBar::add-line:vertical,  QScrollBar::sub-line:vertical {
             </property>
            </widget>
           </item>
-          <item row="12" column="0" alignment="Qt::AlignRight">
-           <widget class="QLabel" name="label_3">
+          <item row="4" column="0" alignment="Qt::AlignRight">
+           <widget class="QLabel" name="label_5">
             <property name="text">
-             <string>Completed</string>
+             <string>RBW (Hz)</string>
             </property>
            </widget>
           </item>
@@ -310,18 +306,90 @@ QScrollBar::add-line:vertical,  QScrollBar::sub-line:vertical {
             </property>
            </widget>
           </item>
-          <item row="1" column="1">
-           <widget class="QLineEdit" name="samplerateLineEdit">
-            <property name="maximumSize">
-             <size>
-              <width>100</width>
-              <height>16777215</height>
-             </size>
-            </property>
+          <item row="1" column="0" alignment="Qt::AlignRight">
+           <widget class="QLabel" name="samplerateLabel">
             <property name="text">
-             <string>30e6</string>
+             <string>Sampling rate (Hz)</string>
             </property>
            </widget>
+          </item>
+          <item row="13" column="1">
+           <widget class="QPushButton" name="averagePushButton">
+            <property name="text">
+             <string>Average</string>
+            </property>
+           </widget>
+          </item>
+          <item row="19" column="0" alignment="Qt::AlignRight">
+           <widget class="QLabel" name="label_4">
+            <property name="text">
+             <string>Display averages</string>
+            </property>
+           </widget>
+          </item>
+          <item row="11" column="0" alignment="Qt::AlignRight">
+           <widget class="QLabel" name="label_2">
+            <property name="text">
+             <string>N averages</string>
+            </property>
+           </widget>
+          </item>
+          <item row="10" column="1">
+           <spacer name="verticalSpacer">
+            <property name="orientation">
+             <enum>Qt::Vertical</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>20</width>
+              <height>40</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item row="14" column="0" colspan="2" alignment="Qt::AlignRight">
+           <widget class="QListWidget" name="traceListWidget">
+            <property name="toolTip">
+             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Hotkeys:&lt;br/&gt;  Ctrl+x - hide/show trace &lt;br/&gt;  Ctr+s - save selected&lt;br/&gt;  Del - delete selected&lt;/p&gt;&lt;p&gt;The text color changes when the trace is saved.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            </property>
+            <item>
+             <property name="text">
+              <string>Trace 1</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Background</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Background without input</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QComboBox" name="nsamplesComboBox">
+            <item>
+             <property name="text">
+              <string>2,048</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+          <item row="18" column="1">
+           <spacer name="verticalSpacer_2">
+            <property name="orientation">
+             <enum>Qt::Vertical</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>20</width>
+              <height>40</height>
+             </size>
+            </property>
+           </spacer>
           </item>
           <item row="5" column="1">
            <widget class="QComboBox" name="channelComboBox">
@@ -359,17 +427,46 @@ QScrollBar::add-line:vertical,  QScrollBar::sub-line:vertical {
             </item>
            </widget>
           </item>
-          <item row="19" column="0" alignment="Qt::AlignRight">
-           <widget class="QLabel" name="label_4">
+          <item row="9" column="0" alignment="Qt::AlignRight">
+           <widget class="QLabel" name="label">
             <property name="text">
-             <string>Display averages</string>
+             <string>Trigger</string>
             </property>
            </widget>
           </item>
-          <item row="2" column="0" alignment="Qt::AlignRight">
-           <widget class="QLabel" name="nsamplesLabel">
+          <item row="4" column="1">
+           <widget class="QLabel" name="rbwLabel">
+            <property name="toolTip">
+             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;The spacing between the Fourier transform frequency bins.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            </property>
             <property name="text">
-             <string>N samples</string>
+             <string>700</string>
+            </property>
+           </widget>
+          </item>
+          <item row="6" column="0" alignment="Qt::AlignRight">
+           <widget class="QLabel" name="terminationLabel">
+            <property name="text">
+             <string>Termination</string>
+            </property>
+           </widget>
+          </item>
+          <item row="11" column="1">
+           <widget class="QLineEdit" name="naveragesLineEdit">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+            <property name="maximumSize">
+             <size>
+              <width>100</width>
+              <height>16777215</height>
+             </size>
+            </property>
+            <property name="text">
+             <string>100</string>
             </property>
            </widget>
           </item>
@@ -395,102 +492,29 @@ QScrollBar::add-line:vertical,  QScrollBar::sub-line:vertical {
             </property>
            </widget>
           </item>
-          <item row="10" column="1">
-           <spacer name="verticalSpacer">
-            <property name="orientation">
-             <enum>Qt::Vertical</enum>
-            </property>
-            <property name="sizeHint" stdset="0">
-             <size>
-              <width>20</width>
-              <height>40</height>
-             </size>
-            </property>
-           </spacer>
-          </item>
-          <item row="4" column="1">
-           <widget class="QLabel" name="rbwLabel">
+          <item row="20" column="1">
+           <widget class="QComboBox" name="psdwindowComboBox">
             <property name="toolTip">
-             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;The spacing between the Fourier transform frequency bins.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-            </property>
-            <property name="text">
-             <string>700</string>
-            </property>
-           </widget>
-          </item>
-          <item row="9" column="1">
-           <widget class="QComboBox" name="trigmodeComboBox">
-            <property name="maximumSize">
-             <size>
-              <width>100</width>
-              <height>16777215</height>
-             </size>
+             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Rectangular corresponds to no window.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
             </property>
             <item>
              <property name="text">
-              <string>Software</string>
+              <string>Hann</string>
              </property>
             </item>
             <item>
              <property name="text">
-              <string>External</string>
+              <string>Rectangular</string>
              </property>
             </item>
            </widget>
           </item>
-          <item row="5" column="0" alignment="Qt::AlignRight">
-           <widget class="QLabel" name="channelLabel">
+          <item row="20" column="0" alignment="Qt::AlignRight">
+           <widget class="QLabel" name="label_7">
             <property name="text">
-             <string>Channel</string>
+             <string>Window function</string>
             </property>
            </widget>
-          </item>
-          <item row="13" column="1">
-           <widget class="QPushButton" name="averagePushButton">
-            <property name="text">
-             <string>Average</string>
-            </property>
-           </widget>
-          </item>
-          <item row="4" column="0" alignment="Qt::AlignRight">
-           <widget class="QLabel" name="label_5">
-            <property name="text">
-             <string>RBW (Hz)</string>
-            </property>
-           </widget>
-          </item>
-          <item row="6" column="0" alignment="Qt::AlignRight">
-           <widget class="QLabel" name="terminationLabel">
-            <property name="text">
-             <string>Termination</string>
-            </property>
-           </widget>
-          </item>
-          <item row="15" column="1">
-           <spacer name="verticalSpacer_3">
-            <property name="orientation">
-             <enum>Qt::Vertical</enum>
-            </property>
-            <property name="sizeHint" stdset="0">
-             <size>
-              <width>20</width>
-              <height>40</height>
-             </size>
-            </property>
-           </spacer>
-          </item>
-          <item row="18" column="1">
-           <spacer name="verticalSpacer_2">
-            <property name="orientation">
-             <enum>Qt::Vertical</enum>
-            </property>
-            <property name="sizeHint" stdset="0">
-             <size>
-              <width>20</width>
-              <height>40</height>
-             </size>
-            </property>
-           </spacer>
           </item>
          </layout>
         </item>

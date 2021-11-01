@@ -25,8 +25,7 @@ from pyqtgraph.Qt import QtGui
 from .rtsui import Ui_RtsWidget
 from .trace_list import TraceList
 
-#from .card import Card
-from dummy_card import DummyCard as Card
+from .card import Card
 
 
 TDSF = 100  # The shrinking factor for time-domain data.

@@ -77,7 +77,6 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
 
             adc.reset()
             
-            # TODO: set clock mode before setting acquisition.
             adc.set_acquisition(**settings)
             adc.set_trigger(trig_mode)
 

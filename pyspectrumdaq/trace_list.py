@@ -11,10 +11,26 @@ from pyqtgraph.Qt import QtGui
 from pyqtgraph.Qt import QtWidgets 
 
 class TraceList:
-    """A class that manages a combination of a list widget, a pyqtgraph plot
-    and a directory edit field."""
+    """A class that manages a combination of a list widget, pyqtgraph plot
+    and directory edit field to color traces, edit their names,
+    hide/show them from the display and save their data in txt or hdf5 files.
+
+    Traces are dictionaries that have 1D arrays of data under "x" and "y" keys 
+    plus optional metadata entries under other keys. Metadata can be any 
+    serializable objects, possibly nested.
+    """
 
     def __init__(self, listWidget, plotItem, dirLineEdit) -> None:
+        """Inits a list and links interactive controls to it.
+
+        Args:
+            listWidget (QListWidget): 
+                A widget that displays the items in the list with their names.
+            plotItem (plotItem):
+                A pyqtgraph plot in which the traces are to be displayed.
+            dirLineEdit (QLineEdit):
+                An edit field to input the base directory.
+        """
         super().__init__()
         self.listWidget = listWidget
         self.plotItem = plotItem
@@ -87,8 +103,7 @@ class TraceList:
 
 
     def toggle_visibility(self) -> None:
-        """Sets or toggles the visibility of the current trace.
-        """
+        """Sets or toggles the visibility of the current trace in the plot."""
 
         d = self._selected_item()
         if not d:
@@ -139,7 +154,6 @@ class TraceList:
 
     def save_selected(self, fmt: str = "txt"):
         """Saves the currently selected trace."""
-        # TODO: mention in the comment that fields x, y, xlabel and ylabel are expected
 
         d = self._selected_item()
         if not d:
@@ -166,6 +180,8 @@ class TraceList:
             else:
                 print(f"Keeping the exiting file {full_name}.")
                 return
+        elif not os.path.exists(dir_name):
+            os.makedirs(dir_name)  # Creates the base directory.
 
         tr = d["xytrace"].copy()  # TODO: come up with a better way of doing it
         x = tr.pop("x")

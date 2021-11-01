@@ -3,6 +3,12 @@ Acquire data from the Spectrum M2 DAQ cards. This module supports internal and e
 
 Tested with M2i.4931-Exp.
 
+Requirements:
+* numba
+* pyqtgraph
+* pyfftw
+* h5py
+
 A simple multi-channel usage example:
 
 ```python

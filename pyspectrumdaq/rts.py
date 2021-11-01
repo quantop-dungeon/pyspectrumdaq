@@ -174,7 +174,7 @@ def daq_loop(card_args: list, conn, buff, buff_acc, buff_t, cnt, navg, navg_comp
                             # if the trigger is software, because otherwise  
                             # there are unknown triggering delays.
 
-                            print(f"Data acquisition delay (s): {delay}")
+                            print(f"Data processing delay (s): {delay}")
                             prev_not_time = now
 
                         if conn.poll():
@@ -238,10 +238,11 @@ class RtsWindow(QtGui.QMainWindow):
         self.card_args = card_args
         self.current_settings = defaults
 
-        self.max_disp_samplerate = 1 * 10**7  # The maximum number of samples
-                                              # displayed per second.
-        self.max_disp_rate = 40  # The maximum number of plots per second.
-        self.max_delay = 1  # (s)
+        self.max_disp_rate = 30  # The maximum number of plots per second.
+        self.max_delay = 0.5  # The maximum target delay (s) between 
+                              # the data acquisition and display. This number 
+                              # is not ensured for large traces that take long
+                              # to process.
 
         self.daq_proc = None  # A reference to the data acquisition process.
 
@@ -505,10 +506,7 @@ class RtsWindow(QtGui.QMainWindow):
             # The acquisition rate in traces per second.
             trace_acq_rate = 1 / dt_trace
 
-            settings["navg_rt"] = max(
-                ceil(settings["samplerate"] / self.max_disp_samplerate),
-                ceil(trace_acq_rate / self.max_disp_rate)
-            )
+            settings["navg_rt"] = ceil(trace_acq_rate / self.max_disp_rate)
 
         self.r_cnt = 0
         self.disp_buff_overflow = False

@@ -18,7 +18,7 @@ The spectrum analyzer app, in addition, requires:
 * pyfftw
 * h5py
 
-The package is yested with a M2i.4931-Exp card and pyqtgraph 0.11.0.
+The package is tested with a M2i.4931-Exp card and pyqtgraph 0.11.0.
 
 ## Usage examples
 
